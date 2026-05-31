@@ -91,6 +91,7 @@ def decompose(vectors, depth=0):
 
     return best_splits
 
+# i pressed it twice! now im double scared
 @lru_cache(maxsize=None)
 def decompose_bnr(vectors):
     if is_unimodular(vectors):
