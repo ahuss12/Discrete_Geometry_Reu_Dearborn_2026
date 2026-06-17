@@ -2,6 +2,7 @@ import math
 from sympy import Matrix, Rational, linsolve
 from dataclasses import dataclass
 from functools import cached_property
+from fractions import Fraction
 
 Vector = tuple[int, ...]
 
@@ -80,17 +81,19 @@ def canonicalForm(M: list[list[int]]) -> list[list[int]]:
 class Cone:
     rays: tuple[Vector, ...]
 
-    ## Builds cones in canonical form from list of rays and stores primitive data
+    ## Builds cone from list of rays and stores primitive data
     ## rays must be linearly independent and full-dimensional
     @classmethod
     def buildCone(cls, rays) -> "Cone":
         n = len(rays)
+
         if not rays:
             raise ValueError("need at least one generator")
         
         if any(all(x == 0 for x in r) for r in rays):
             raise ValueError("generators cannot be zero vector")
             
+        tuple(sorted(rays)) ## sort to have a canonical form
         rays = tuple(primitive(tuple(r)) for r in rays)
 
         if any(len(r) != n for r in rays):
@@ -99,10 +102,7 @@ class Cone:
         if Matrix(rays).rank() != n:
             raise ValueError("cone must be simplicial")
 
-        H = [[r[j] for r in rays] for j in range(n)]
-        H = canonicalForm(H)
-        generators = tuple(tuple(H[i][j] for i in range(n)) for j in range(n))
-        return cls(generators)
+        return cls(rays)
 
     ## dimension of cone
     @property
@@ -125,11 +125,11 @@ class Cone:
         return abs(intDet(self.rays))
     
     ## returns the barycentric coordinates of the point p. 
-    def barycentricCoords(self, p: Vector) -> tuple[Rational,...]:
+    def barycentricCoords(self, p: Vector) -> tuple[Fraction,...]:
         A = Matrix(self.rays).T
         b = Matrix(p)
         (coords,) = linsolve((A,b))
-        coords = tuple(coords)
+        coords = tuple(Fraction(c.p, c.q) for c in coords)
 
         if any(x<0 for x in coords):
             raise ValueError("point p must be in the cone")
@@ -150,7 +150,31 @@ class Cone:
     
     ## gives the extraneous set (all points in the fundamental parallelepiped) of the cone
     def extraneousSet(self) -> list[Vector]:
-        return 
+        n = len(self.rays)
+        A = [[r[j] for r in self.rays] for j in range(n)]
+        H = canonicalForm([row[:] for row in A]) ## copy over
+
+        lambdas = [[Fraction(i, H[-1][-1])] for i in range(H[-1][-1])]
+
+        for i in reversed(range(n-1)):
+            newLambdas = []
+            for curr in lambdas:
+                s = sum(curr[col - (i+1)] * H[i][col] for col in range(i+1, n))
+                for k in range(H[i][i]): 
+                    newLambdas.append([Fraction(math.ceil(s) - s + k,H[i][i])] + curr)
+            lambdas = newLambdas 
+
+        lambdas = [tuple(int(math.sumprod(A[i], vec)) for i in range(n)) for vec in lambdas]
+
+        return lambdas
+
+    ## put cone into HNF
+    def HNF(self) -> "Cone":
+        n = len(self.rays)
+        H = [[r[j] for r in self.rays] for j in range(n)]
+        H = canonicalForm(H)
+        self.rays = tuple(tuple(H[i][j] for i in range(n)) for j in range(n))
+
     
     ## stellar subdivides through the given point, and returns the resulting cones. 
     def subdivide(self, p: Vector) -> list["Cone"]:
@@ -167,4 +191,9 @@ class Cone:
                 generators[i] = p 
                 fan.append(Cone.buildCone(generators))
         return fan
-    
+       
+
+
+
+
+
