@@ -5,6 +5,7 @@ from functools import cached_property
 from fractions import Fraction
 from torch_geometric.data import HeteroData
 import torch
+import random
 
 DIMENSION: int = 7
 
@@ -471,34 +472,82 @@ class ConeLatticeGraph(HeteroData):
         data['lattice', 'contains', 'cone'   ].edge_index = self['lattice', 'contains', 'cone'   ].edge_index.clone()
         return data
 
+def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
+    if numOps is None:
+        numOps = n * n * 10
+
+    while True:
+        ## seed: identity with last row = (1, 0, ..., 0, d)
+        ## det = d, all rows primitive since gcd(1, 0, ..., 0, d) = 1
+        M = []
+        for i in range(n):
+            row = []
+            for j in range(n):
+                if i == j:
+                    row.append(1)
+                else:
+                    row.append(0)
+            M.append(row)
+        M[n-1][0] = 1
+        M[n-1][n-1] = d
+
+        for _ in range(numOps):
+            i, j = random.sample(range(n), 2)
+            sign = random.choice([-1, 1])
+            if random.random() < 0.5:
+                ## row op: row[i] += ±1 * row[j]
+                for k in range(n):
+                    M[i][k] += sign * M[j][k]
+            else:
+                ## col op: col[i] += ±1 * col[j]
+                for r in range(n):
+                    M[r][i] += sign * M[r][j]
+
+        ## retry if any row is non-primitive -- buildCone would primitivize it
+        ## and change the effective determinant away from d
+        allPrimitive = True
+        for row in M:
+            if math.gcd(*row) != 1:
+                allPrimitive = False
+                break
+
+        if allPrimitive:
+            result = []
+            for row in M:
+                result.append(tuple(row))
+            return result
 
 def main():
-    # This demo uses 4-D cones, so we pass dimension=4 explicitly.
-    # For your real work, omit the argument and the DIMENSION=7 default applies.
-    c = Cone.buildCone([[1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 1, 0], [0, 1, 2, 3]])
-    fpp = c.extraneousSet()
-    print(fpp)
-    for i in range(len(fpp)):
-        print(c.barycentricCoords(fpp[i]))
+    # # This demo uses 4-D cones, so we pass dimension=4 explicitly.
+    # # For your real work, omit the argument and the DIMENSION=7 default applies.
+    # c = Cone.buildCone([[1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 1, 0], [0, 1, 2, 3]])
+    # fpp = c.extraneousSet()
+    # print(fpp)
+    # for i in range(len(fpp)):
+    #     print(c.barycentricCoords(fpp[i]))
 
-    CLG = ConeLatticeGraph(dimension=4)
-    CLG.addConeNode(c)
+    # CLG = ConeLatticeGraph(dimension=4)
+    # CLG.addConeNode(c)
 
-    CLG.printAdjacencyList()
+    # CLG.printAdjacencyList()
 
-    CLG.subdivide(0, 2)
+    # CLG.subdivide(0, 2)
 
-    print()
-    CLG.printAdjacencyList()
+    # print()
+    # CLG.printAdjacencyList()
 
-    CLG.listCones(True)
-    CLG.listConeLatticePoints(1, True)
+    # CLG.listCones(True)
+    # CLG.listConeLatticePoints(1, True)
 
-    # Demonstrate that toHeteroData() now returns real features
-    data = CLG.toHeteroData()
-    print(f"\ncone feature shape:    {data['cone'].x.shape}")     # (num_cones, 4²+1 = 17)
-    print(f"lattice feature shape: {data['lattice'].x.shape}")    # (num_lattice, 4)
-    print(f"\nFirst cone features:\n{data['cone'].x[0]}")
+    # # Demonstrate that toHeteroData() now returns real features
+    # data = CLG.toHeteroData()
+    # print(f"\ncone feature shape:    {data['cone'].x.shape}")     # (num_cones, 4²+1 = 17)
+    # print(f"lattice feature shape: {data['lattice'].x.shape}")    # (num_lattice, 4)
+    # print(f"\nFirst cone features:\n{data['cone'].x[0]}")
+
+    M = Matrix(generateRandomCone(4, 12, 20))
+    print(M)
+    print(M.det())
 
 
 main()
