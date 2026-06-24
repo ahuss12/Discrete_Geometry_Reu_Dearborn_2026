@@ -260,6 +260,19 @@ class ConeLatticeGraph(HeteroData):
                 print(f"  Lattice {lid}: coord={coord}")
             points.append(coord)
         return points
+    
+    def listLatticePoints(self, verbose: bool = False) -> list[tuple[int, tuple]]:
+        points = []
+
+        for latticeId in sorted(self._lattice_id_to_idx):
+            coord = self._lattice_id_to_coord[latticeId]
+
+            if verbose:
+                print(f"Lattice {latticeId}: coord={coord}")
+
+            points.append((latticeId, coord))
+
+        return points
 
     def addAdjacentEdge(self, coneIdA: int, coneIdB: int) -> None:
         idxA = self._cone_id_to_idx[coneIdA]
@@ -418,19 +431,6 @@ class ConeLatticeGraph(HeteroData):
             self._cone_idx_to_id[coneIdx]
             for coneIdx in coneIdxs
         ))
-    
-    def listLatticePoints(self, verbose: bool = False) -> list[tuple[int, tuple]]:
-        points = []
-
-        for latticeId in sorted(self._lattice_id_to_idx):
-            coord = self._lattice_id_to_coord[latticeId]
-
-            if verbose:
-                print(f"Lattice {latticeId}: coord={coord}")
-
-            points.append((latticeId, coord))
-
-        return points
 
     def printAdjacencyList(self) -> None:
         print("=== Cone adjacency ===")
@@ -471,6 +471,12 @@ class ConeLatticeGraph(HeteroData):
         data['cone',    'contains', 'lattice'].edge_index = self['cone',    'contains', 'lattice'].edge_index.clone()
         data['lattice', 'contains', 'cone'   ].edge_index = self['lattice', 'contains', 'cone'   ].edge_index.clone()
         return data
+    
+    def isDecomposed(self) -> bool:
+        for cone in self._cone_objects.values():
+            if cone.isSingular:
+                return False
+        return True
 
 def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
     if numOps is None:
