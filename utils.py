@@ -5,6 +5,7 @@ from functools import cached_property
 from fractions import Fraction
 from torch_geometric.data import HeteroData
 import torch
+import random
 
 DIMENSION: int = 7
 
@@ -91,12 +92,11 @@ class Cone:
 
         if not rays:
             raise ValueError("need at least one generator")
+        
+        rays = tuple(sorted(primitive(tuple(r)) for r in rays))
 
         if any(all(x == 0 for x in r) for r in rays):
             raise ValueError("generators cannot be zero vector")
-
-        tuple(sorted(rays))  # sort to have a canonical form
-        rays = tuple(primitive(tuple(r)) for r in rays)
 
         if any(len(r) != n for r in rays):
             raise ValueError("cone must be full dimensional")
@@ -202,7 +202,8 @@ def computeConeFeatures(cone: "Cone") -> torch.Tensor:
 def computeLatticeFeatures(coord: tuple) -> torch.Tensor:
     return torch.tensor([float(x) for x in coord], dtype=torch.float)
 
-
+def isPrimitiveNonzero(point: Vector) -> bool:
+    return math.gcd(*point) == 1
 
 ## Heterogeneous graph over a fan
 class ConeLatticeGraph(HeteroData):
@@ -259,6 +260,19 @@ class ConeLatticeGraph(HeteroData):
                 print(f"  Lattice {lid}: coord={coord}")
             points.append(coord)
         return points
+    
+    def listLatticePoints(self, verbose: bool = False) -> list[tuple[int, tuple]]:
+        points = []
+
+        for latticeId in sorted(self._lattice_id_to_idx):
+            coord = self._lattice_id_to_coord[latticeId]
+
+            if verbose:
+                print(f"Lattice {latticeId}: coord={coord}")
+
+            points.append((latticeId, coord))
+
+        return points
 
     def addAdjacentEdge(self, coneIdA: int, coneIdB: int) -> None:
         idxA = self._cone_id_to_idx[coneIdA]
@@ -280,17 +294,35 @@ class ConeLatticeGraph(HeteroData):
         neighborIdxs = edgeIndex[1][mask].tolist()
         return [self._cone_idx_to_id[i] for i in neighborIdxs]
 
-    def addContainsEdge(self, coneId: int, latticeId: int) -> None:
-        coneIdx    = self._cone_id_to_idx[coneId]
+    def addContainsEdge(self, coneId: int, latticeId: int, barycentric: tuple[Fraction, ...]) -> None:
+        coneIdx = self._cone_id_to_idx[coneId]
         latticeIdx = self._lattice_id_to_idx[latticeId]
 
-        forward    = self['cone',    'contains', 'lattice'].edge_index
-        newForward = torch.tensor([[coneIdx], [latticeIdx]], dtype=torch.long)
-        self['cone', 'contains', 'lattice'].edge_index = torch.cat([forward, newForward], dim=1)
+        attr = torch.tensor([[float(x) for x in barycentric]], dtype=torch.float)
 
-        backward    = self['lattice', 'contains', 'cone'].edge_index
-        newBackward = torch.tensor([[latticeIdx], [coneIdx]], dtype=torch.long)
-        self['lattice', 'contains', 'cone'].edge_index = torch.cat([backward, newBackward], dim=1)
+        forward_store = self['cone', 'contains', 'lattice']
+        forward_store.edge_index = torch.cat([
+                forward_store.edge_index,
+                torch.tensor([[coneIdx], [latticeIdx]], dtype=torch.long)
+            ],
+            dim=1
+        )
+        forward_store.edge_attr = torch.cat(
+            [forward_store.edge_attr, attr],
+            dim=0
+        )
+
+        backward_store = self['lattice', 'contains', 'cone']
+        backward_store.edge_index = torch.cat([
+                backward_store.edge_index,
+                torch.tensor([[latticeIdx], [coneIdx]], dtype=torch.long)
+            ],
+            dim=1
+        )
+        backward_store.edge_attr = torch.cat(
+            [backward_store.edge_attr, attr],
+            dim=0
+        )
 
     def getOrCreateLatticeNode(self, coord: tuple) -> int:
         if coord in self._coord_to_lattice_id:
@@ -305,11 +337,18 @@ class ConeLatticeGraph(HeteroData):
         self._lattice_idx_to_id[idx]        = latticeId
         self._lattice_id_to_coord[latticeId] = coord
 
-        # ── Real lattice features (coordinate vector) ──
+        #  Real lattice features (coordinate vector) 
         featureRow = computeLatticeFeatures(coord).unsqueeze(0)
         self['lattice'].x = torch.cat([self['lattice'].x, featureRow], dim=0)
 
         return latticeId
+    
+    def addConeCandidateEdges(self, coneId: int, cone: Cone) -> None:
+        for point in cone.extraneousSet():
+            if isPrimitiveNonzero(point):
+                latticeId = self.getOrCreateLatticeNode(point)
+                barycentric = cone.barycentricCoords(point)
+                self.addContainsEdge(coneId, latticeId, barycentric)
 
     def addConeNode(self, cone: "Cone") -> int:
         coneId = self._next_cone_id
@@ -320,15 +359,11 @@ class ConeLatticeGraph(HeteroData):
         self._cone_idx_to_id[idx]     = coneId
         self._cone_objects[coneId]    = cone
 
-        # ── Real cone features (sorted-flattened rays + multiplicity) ──
+        #  Real cone features (sorted-flattened rays + multiplicity) 
         featureRow = computeConeFeatures(cone).unsqueeze(0)
         self['cone'].x = torch.cat([self['cone'].x, featureRow], dim=0)
 
-        for point in cone.extraneousSet():
-            if math.gcd(*point) == 1:
-                latticeId = self.getOrCreateLatticeNode(point)
-                self.addContainsEdge(coneId, latticeId)
-
+        self.addConeCandidateEdges(coneId, cone)
         return coneId
 
     def removeAllContainsEdges(self, coneId: int) -> None:
@@ -343,44 +378,68 @@ class ConeLatticeGraph(HeteroData):
         idx = self._cone_id_to_idx[coneId]
         self._cone_objects[coneId] = cone
 
-        # ── Re-compute cone features in place ──
         self['cone'].x[idx] = computeConeFeatures(cone)
 
-        for point in cone.extraneousSet():
-            latticeId = self.getOrCreateLatticeNode(point)
-            self.addContainsEdge(coneId, latticeId)
+        self.addConeCandidateEdges(coneId, cone)
 
-    def subdivide(self, coneId: int, latticeId: int) -> list[int]:
-        oldCone = self._cone_objects[coneId]
-        coord   = self._lattice_id_to_coord[latticeId]
+    def subdivide(self, latticeId: int) -> list[int]:
+        coord = self._lattice_id_to_coord[latticeId]
+        
+        ## find all cones this lattice point belongs to
+        latticeIdx = self._lattice_id_to_idx[latticeId]
+        ei = self['lattice', 'contains', 'cone'].edge_index
+        mask = ei[0] == latticeIdx
+        coneIds = [self._cone_idx_to_id[i] for i in ei[1][mask].tolist()]
 
-        results = oldCone.subdivide(coord)
-        if not results:
-            raise ValueError("subdivide produced no resulting cones")
+        allNewConeIds = []
+        for coneId in coneIds:
+            oldCone = self._cone_objects[coneId]
+            results = oldCone.subdivide(coord)
 
-        formerNeighbors = self.getConeNeighbors(coneId)
-        self.removeAllAdjacentEdges(coneId)
+            if not results:
+                raise ValueError(f"subdivide produced no cones for cone {coneId}")
 
-        # results[0] overwrites the existing row/id; results[1:] get new ids
-        self.overwriteConeNode(coneId, results[0])
-        newConeIds = [coneId]
-        for cone in results[1:]:
-            newConeIds.append(self.addConeNode(cone))
+            formerNeighbors = self.getConeNeighbors(coneId)
+            self.removeAllAdjacentEdges(coneId)
 
-        # every pair of new cones is mutually adjacent (they all share p)
-        for i in range(len(newConeIds)):
-            for j in range(i + 1, len(newConeIds)):
-                self.addAdjacentEdge(newConeIds[i], newConeIds[j])
+            self.overwriteConeNode(coneId, results[0])
+            newConeIds = [coneId]
+            for cone in results[1:]:
+                newConeIds.append(self.addConeNode(cone))
 
-        # re-check each former neighbour against each new cone
-        for neighborId in formerNeighbors:
-            neighborCone = self._cone_objects[neighborId]
-            for newId in newConeIds:
-                newCone = self._cone_objects[newId]
-                if conesAdjacent(neighborCone, newCone):
-                    self.addAdjacentEdge(neighborId, newId)
+            ## all new cones from this subdivision are mutually adjacent
+            for i in range(len(newConeIds)):
+                for j in range(i + 1, len(newConeIds)):
+                    self.addAdjacentEdge(newConeIds[i], newConeIds[j])
 
-        return newConeIds
+            ## re-check former neighbors against each new cone
+            for neighborId in formerNeighbors:
+                neighborCone = self._cone_objects[neighborId]
+                for newId in newConeIds:
+                    if conesAdjacent(neighborCone, self._cone_objects[newId]):
+                        self.addAdjacentEdge(neighborId, newId)
+
+            allNewConeIds.extend(newConeIds)
+
+        return allNewConeIds
+    
+    def getLatticeConeNeighbors(self, latticeId: int) -> list[int]:
+        if latticeId not in self._lattice_id_to_idx:
+            raise KeyError(f"Unknown lattice ID: {latticeId}")
+
+        latticeIdx = self._lattice_id_to_idx[latticeId]
+
+        # lattice --contains--> cone
+        edgeIndex = self['lattice', 'contains', 'cone'].edge_index
+
+        mask = edgeIndex[0] == latticeIdx
+        coneIdxs = edgeIndex[1][mask].tolist()
+
+        # `dict.fromkeys` removes duplicates while preserving order.
+        return list(dict.fromkeys(
+            self._cone_idx_to_id[coneIdx]
+            for coneIdx in coneIdxs
+        ))
 
     def printAdjacencyList(self) -> None:
         print("=== Cone adjacency ===")
@@ -421,35 +480,93 @@ class ConeLatticeGraph(HeteroData):
         data['cone',    'contains', 'lattice'].edge_index = self['cone',    'contains', 'lattice'].edge_index.clone()
         data['lattice', 'contains', 'cone'   ].edge_index = self['lattice', 'contains', 'cone'   ].edge_index.clone()
         return data
+    
+    def isDecomposed(self) -> bool:
+        for cone in self._cone_objects.values():
+            if cone.isSingular:
+                return False
+        return True
 
+def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
+    if numOps is None:
+        numOps = n * n * 10
+    
+    retryTimes = 0
+
+    while True:
+        ## seed: identity with last row = (1, 0, ..., 0, d)
+        ## det = d, all rows primitive since gcd(1, 0, ..., 0, d) = 1
+        M = []
+        for i in range(n):
+            row = []
+            for j in range(n):
+                if i == j:
+                    row.append(1)
+                else:
+                    row.append(0)
+            M.append(row)
+        M[n-1][0] = 1
+        M[n-1][n-1] = d
+
+        for _ in range(numOps):
+            i, j = random.sample(range(n), 2)
+            sign = random.choice([-1, 1])
+            if random.random() < 0.5:
+                ## row op: row[i] += ±1 * row[j]
+                for k in range(n):
+                    M[i][k] += sign * M[j][k]
+            else:
+                ## col op: col[i] += ±1 * col[j]
+                for r in range(n):
+                    M[r][i] += sign * M[r][j]
+
+        ## retry if any row is non-primitive -- buildCone would primitivize it
+        ## and change the effective determinant away from d
+        allPrimitive = True
+        for row in M:
+            if math.gcd(*row) != 1:
+                allPrimitive = False
+                retryTimes += 1
+                break
+
+        if allPrimitive:
+            result = []
+            for row in M:
+                result.append(tuple(row))
+            print(retryTimes)
+            return result
 
 def main():
-    # This demo uses 4-D cones, so we pass dimension=4 explicitly.
-    # For your real work, omit the argument and the DIMENSION=7 default applies.
-    c = Cone.buildCone([[1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 1, 0], [0, 1, 2, 3]])
-    fpp = c.extraneousSet()
-    print(fpp)
-    for i in range(len(fpp)):
-        print(c.barycentricCoords(fpp[i]))
+    # # This demo uses 4-D cones, so we pass dimension=4 explicitly.
+    # # For your real work, omit the argument and the DIMENSION=7 default applies.
+    # c = Cone.buildCone([[1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 1, 0], [0, 1, 2, 3]])
+    # fpp = c.extraneousSet()
+    # print(fpp)
+    # for i in range(len(fpp)):
+    #     print(c.barycentricCoords(fpp[i]))
 
-    CLG = ConeLatticeGraph(dimension=4)
-    CLG.addConeNode(c)
+    # CLG = ConeLatticeGraph(dimension=4)
+    # CLG.addConeNode(c)
 
-    CLG.printAdjacencyList()
+    # CLG.printAdjacencyList()
 
-    CLG.subdivide(0, 2)
+    # CLG.subdivide(0, 2)
 
-    print()
-    CLG.printAdjacencyList()
+    # print()
+    # CLG.printAdjacencyList()
 
-    CLG.listCones(True)
-    CLG.listConeLatticePoints(1, True)
+    # CLG.listCones(True)
+    # CLG.listConeLatticePoints(1, True)
 
-    # Demonstrate that toHeteroData() now returns real features
-    data = CLG.toHeteroData()
-    print(f"\ncone feature shape:    {data['cone'].x.shape}")     # (num_cones, 4²+1 = 17)
-    print(f"lattice feature shape: {data['lattice'].x.shape}")    # (num_lattice, 4)
-    print(f"\nFirst cone features:\n{data['cone'].x[0]}")
+    # # Demonstrate that toHeteroData() now returns real features
+    # data = CLG.toHeteroData()
+    # print(f"\ncone feature shape:    {data['cone'].x.shape}")     # (num_cones, 4²+1 = 17)
+    # print(f"lattice feature shape: {data['lattice'].x.shape}")    # (num_lattice, 4)
+    # print(f"\nFirst cone features:\n{data['cone'].x[0]}")
+
+    M = Matrix(generateRandomCone(4, 12, 100))
+    print(M)
+    print(M.det())
 
 
 main()
