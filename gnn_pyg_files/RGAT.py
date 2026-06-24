@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import SAGEConv, HeteroConv, RGATConv
 
-padding_level = 10
+padding_level = 7
 
 class RGAT(nn.Module): 
     def __init__(self, in_channels = padding_level, hidden_channels = 64, out_channels = padding_level, 
@@ -39,9 +39,3 @@ class RGAT(nn.Module):
                 x = F.gelu(x)
             x = x + residual if i != 0 and i != len(self.convs)-1 else x
         return x
-        
-
-
-
-        
-
