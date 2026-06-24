@@ -382,37 +382,46 @@ class ConeLatticeGraph(HeteroData):
 
         self.addConeCandidateEdges(coneId, cone)
 
-    def subdivide(self, coneId: int, latticeId: int) -> list[int]:
-        oldCone = self._cone_objects[coneId]
-        coord   = self._lattice_id_to_coord[latticeId]
+    def subdivide(self, latticeId: int) -> list[int]:
+        coord = self._lattice_id_to_coord[latticeId]
+        
+        ## find all cones this lattice point belongs to
+        latticeIdx = self._lattice_id_to_idx[latticeId]
+        ei = self['lattice', 'contains', 'cone'].edge_index
+        mask = ei[0] == latticeIdx
+        coneIds = [self._cone_idx_to_id[i] for i in ei[1][mask].tolist()]
 
-        results = oldCone.subdivide(coord)
-        if not results:
-            raise ValueError("subdivide produced no resulting cones")
+        allNewConeIds = []
+        for coneId in coneIds:
+            oldCone = self._cone_objects[coneId]
+            results = oldCone.subdivide(coord)
 
-        formerNeighbors = self.getConeNeighbors(coneId)
-        self.removeAllAdjacentEdges(coneId)
+            if not results:
+                raise ValueError(f"subdivide produced no cones for cone {coneId}")
 
-        # results[0] overwrites the existing row/id; results[1:] get new ids
-        self.overwriteConeNode(coneId, results[0])
-        newConeIds = [coneId]
-        for cone in results[1:]:
-            newConeIds.append(self.addConeNode(cone))
+            formerNeighbors = self.getConeNeighbors(coneId)
+            self.removeAllAdjacentEdges(coneId)
 
-        # every pair of new cones is mutually adjacent (they all share p)
-        for i in range(len(newConeIds)):
-            for j in range(i + 1, len(newConeIds)):
-                self.addAdjacentEdge(newConeIds[i], newConeIds[j])
+            self.overwriteConeNode(coneId, results[0])
+            newConeIds = [coneId]
+            for cone in results[1:]:
+                newConeIds.append(self.addConeNode(cone))
 
-        # re-check each former neighbour against each new cone
-        for neighborId in formerNeighbors:
-            neighborCone = self._cone_objects[neighborId]
-            for newId in newConeIds:
-                newCone = self._cone_objects[newId]
-                if conesAdjacent(neighborCone, newCone):
-                    self.addAdjacentEdge(neighborId, newId)
+            ## all new cones from this subdivision are mutually adjacent
+            for i in range(len(newConeIds)):
+                for j in range(i + 1, len(newConeIds)):
+                    self.addAdjacentEdge(newConeIds[i], newConeIds[j])
 
-        return newConeIds
+            ## re-check former neighbors against each new cone
+            for neighborId in formerNeighbors:
+                neighborCone = self._cone_objects[neighborId]
+                for newId in newConeIds:
+                    if conesAdjacent(neighborCone, self._cone_objects[newId]):
+                        self.addAdjacentEdge(neighborId, newId)
+
+            allNewConeIds.extend(newConeIds)
+
+        return allNewConeIds
     
     def getLatticeConeNeighbors(self, latticeId: int) -> list[int]:
         if latticeId not in self._lattice_id_to_idx:
@@ -481,6 +490,8 @@ class ConeLatticeGraph(HeteroData):
 def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
     if numOps is None:
         numOps = n * n * 10
+    
+    retryTimes = 0
 
     while True:
         ## seed: identity with last row = (1, 0, ..., 0, d)
@@ -515,12 +526,14 @@ def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ..
         for row in M:
             if math.gcd(*row) != 1:
                 allPrimitive = False
+                retryTimes += 1
                 break
 
         if allPrimitive:
             result = []
             for row in M:
                 result.append(tuple(row))
+            print(retryTimes)
             return result
 
 def main():
@@ -551,7 +564,7 @@ def main():
     # print(f"lattice feature shape: {data['lattice'].x.shape}")    # (num_lattice, 4)
     # print(f"\nFirst cone features:\n{data['cone'].x[0]}")
 
-    M = Matrix(generateRandomCone(4, 12, 20))
+    M = Matrix(generateRandomCone(4, 12, 100))
     print(M)
     print(M.det())
 
