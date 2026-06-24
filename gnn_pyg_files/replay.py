@@ -6,7 +6,7 @@ from typing import Deque, Iterable, List
 
 from torch_geometric.data import HeteroData
 
-
+## Replay buffer with uniform random sampling 
 class ReplayBuffer:
     def __init__(self, capacity: int = 50_000, seed: int = 0) -> None:
         self.capacity = capacity
