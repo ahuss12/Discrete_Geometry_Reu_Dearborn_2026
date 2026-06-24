@@ -277,9 +277,12 @@ class ConeLatticeGraph(HeteroData):
     def addAdjacentEdge(self, coneIdA: int, coneIdB: int) -> None:
         idxA = self._cone_id_to_idx[coneIdA]
         idxB = self._cone_id_to_idx[coneIdB]
-        existing = self['cone', 'adjacent', 'cone'].edge_index
+        ei = self['cone', 'adjacent', 'cone'].edge_index
+        duplicate = ((ei[0] == idxA) & (ei[1] == idxB)).any()
+        if duplicate:
+            return
         newEdges = torch.tensor([[idxA, idxB], [idxB, idxA]], dtype=torch.long)
-        self['cone', 'adjacent', 'cone'].edge_index = torch.cat([existing, newEdges], dim=1)
+        self['cone', 'adjacent', 'cone'].edge_index = torch.cat([ei, newEdges], dim=1)
 
     def removeAllAdjacentEdges(self, coneId: int) -> None:
         idx = self._cone_id_to_idx[coneId]
@@ -486,6 +489,10 @@ class ConeLatticeGraph(HeteroData):
             if cone.isSingular:
                 return False
         return True
+    
+    def getValidActions(self) -> list[int]:
+        ei = self['lattice', 'contains', 'cone'].edge_index
+        return list(set(self._lattice_idx_to_id[i] for i in ei[0].tolist()))
 
 def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
     if numOps is None:
