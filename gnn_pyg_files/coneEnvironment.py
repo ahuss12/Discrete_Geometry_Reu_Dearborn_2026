@@ -165,7 +165,7 @@ class Cone:
         n = len(self.rays)
         H = [[r[j] for r in self.rays] for j in range(n)]
         H = canonicalForm(H)
-        self.rays = tuple(tuple(H[i][j] for i in range(n)) for j in range(n))
+        return Cone(rays = tuple(tuple(H[i][j] for i in range(n)) for j in range(n)))
 
     def subdivide(self, p: Vector) -> list["Cone"]:
         p = primitive(p)

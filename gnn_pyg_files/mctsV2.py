@@ -167,7 +167,9 @@ class MCTS:
     @torch.no_grad()
     def _evaluate_state(self, state: ConeLatticeGraph) -> Tuple[List[latticeId], np.ndarray, float]:
         
-        actions = state.listLatticePoints()
+        actions = [latticeId for latticeId, _ in state.listLatticePoints()]
+        
+        state.listLatticePoints()
         if len(actions) == 0:
             return [], np.zeros(0, dtype=np.float64), 0.0
 
