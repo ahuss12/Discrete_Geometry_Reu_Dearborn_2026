@@ -1,79 +1,11 @@
 import math
-from sympy import Matrix, Rational, linsolve
+from sympy import Matrix, linsolve
 from dataclasses import dataclass
 from functools import cached_property
 from fractions import Fraction
+from utils import primitive, intDet, canonicalForm
 
 Vector = tuple[int, ...]
-
-## Makes an input vector primitive
-def primitive(v: Vector) -> Vector:
-    gcd = math.gcd(*v)
-
-    if gcd == 0:
-        raise ValueError("zero vector not allowed")
-
-    return tuple(x // gcd for x in v)
-
-## computes g = x*a + y*b using extended euclidean algo and returns the triple (g,x,y)
-def extendedEuclid(a: int, b: int) -> tuple[int, int, int]:
-    old_r, r = a, b
-    old_s, s = 1, 0
-    old_t, t = 0, 1
-    while r != 0:
-        q = old_r // r
-        old_r, r = r, old_r - q * r
-        old_s, s = s, old_s - q * s
-        old_t, t = t, old_t - q * t
-    if old_r < 0:
-        old_r, old_s, old_t = -old_r, -old_s, -old_t
-    return old_r, old_s, old_t
-
-## gives exact integer determinant using the Bareiss algorithm
-def intDet(M: tuple[Vector, ...]) -> int:
-    M = [list(row) for row in M]
-    n = len(M)
-    sign, prev = 1, 1
-    for k in range(n - 1):
-        if M[k][k] == 0:  # swap with a non-zero row if needed
-            for r in range(k + 1, n):
-                if M[r][k] != 0:
-                    M[r], M[k] = M[k], M[r]
-                    sign *= -1
-                    break
-            else:
-                return 0
-        for i in range(k + 1, n):
-            for j in range(k + 1, n):
-                M[i][j] = (M[i][j] * M[k][k] - M[i][k] * M[k][j]) // prev
-            M[i][k] = 0
-        prev = M[k][k]
-    return sign * M[-1][-1]
-
-## puts a matrix into our canonical form
-def canonicalForm(M: list[list[int]]) -> list[list[int]]:
-    n = len(M)
-    ## triangularization step: for each column, reduce [x,y] -> [g,0] where g = gcd(x,y)
-    for j in range(n):
-        for i in range(j + 1, n):
-            if M[i][j] == 0:
-                continue
-            g, a, b = extendedEuclid(M[j][j], M[i][j])
-            rowJ = [a * M[j][col] + b * M[i][col] for col in range(n)]
-            rowI = [-(M[i][j] // g) * M[j][col] + (M[j][j] // g) * M[i][col] for col in range(n)]
-            M[j], M[i] = rowJ, rowI
-        if M[j][j] < 0:
-            M[j] = [-x for x in M[j]]
-
-    ## reduce each column by the pivot so all entries are non-negative and < pivot
-    for j in range(n):
-        for i in range(j):
-            quotient = M[i][j] // M[j][j]
-            if quotient:
-                M[i] = [M[i][col] - quotient * M[j][col] for col in range(n)]
-
-    return M
-
 
 ## Custom (rational, simplicial, full-dimensional) cone class
 ## n-dimensional cone with exactly n generators
@@ -182,6 +114,10 @@ class Cone:
                 fan.append(Cone.buildCone(generators))
         return fan
 
+# ===========================================================================================
+#  FAN OPERATIONS
+# ===========================================================================================
+
 ## divides a list of cones through a lattice point. All cones that contain that lattice point in their FPP are subdivided. 
 def fanSubdivide(fan: list["Cone"], p: Vector) -> list["Cone"]:
     for i, cone in enumerate(fan):
@@ -190,3 +126,66 @@ def fanSubdivide(fan: list["Cone"], p: Vector) -> list["Cone"]:
             del fan[i]
             fan += new_cones
     return fan
+
+# ===========================================================================================
+#  TESTING
+# ===========================================================================================
+
+def main():
+    # ---- nonsingular 2D cone: generators form a Z-basis, mult(σ)=1 ----
+    smooth = Cone.buildCone([(1, 0), (0, 1)])
+    assert smooth.dimension == 2 and smooth.numGenerators == 2
+    assert smooth.multiplicity == 1
+    assert smooth.isSingular is False
+    # extraneous set of a nonsingular cone is {0} only
+    assert smooth.extraneousSet() == [(0, 0)]
+
+    # ---- singular 2D cone: σ = <(1,0),(1,2)>, mult(σ)=2 ----
+    sing = Cone.buildCone([(1, 0), (1, 2)])
+    assert sing.multiplicity == 2
+    assert sing.isSingular is True
+    # |extraneous set| = mult(σ) = det(σ)
+    assert len(sing.extraneousSet()) == sing.multiplicity == 2
+
+    # barycentricCoords: express a generator -> standard basis coord
+    assert sing.barycentricCoords((1, 0)) == (Fraction(1), Fraction(0))
+    assert sing.contains((1, 1)) is True
+    assert sing.contains((-1, 0)) is False
+
+    # HNF: canonical form must preserve multiplicity (unimodular column ops)
+    assert sing.HNF().multiplicity == sing.multiplicity
+
+    # ---- stellar subdivision through an extraneous (irreducible*) point ----
+    # K \ {0} is nonempty since σ is singular; subdivide through such a w.
+    w = next(v for v in sing.extraneousSet() if any(c != 0 for c in v))
+    star = sing.subdivide(w)
+    # Subdivision Multiplicity Lemma: mult(δ_h) = λ_h · mult(σ),
+    # so the refinement's multiplicities sum to mult(σ).
+    assert sum(c.multiplicity for c in star) == sing.multiplicity
+    # subdividing on a generating ray is rejected
+    try:
+        sing.subdivide((1, 0)); assert False
+    except ValueError:
+        pass
+
+    # ---- singular 3D cone: <e3, e3+3e1, e3+3e2>, mult(σ)=9 ----
+    cone3 = Cone.buildCone([(0, 0, 1), (3, 0, 1), (0, 3, 1)])
+    assert cone3.dimension == 3 and cone3.multiplicity == 9
+
+    # ---- fanSubdivide: refine every maximal cone whose FPP contains p ----
+    #fan = [Cone.buildCone([(1, 0), (1, 2)])]
+    #refined = fanSubdivide(fan, w)
+    #assert sum(c.multiplicity for c in refined) == 2  # multiplicity conserved
+
+    # ---- construction guards ----
+    for bad in ([(0, 0)], [(1, 0, 0), (0, 1, 0)], [(1, 0), (2, 0)]):
+        try:
+            Cone.buildCone(bad); assert False
+        except ValueError:
+            pass
+
+    print("all tests passed")
+
+
+if __name__ == "__main__":
+    main()
