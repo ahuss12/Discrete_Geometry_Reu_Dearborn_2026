@@ -7,7 +7,8 @@ import numpy as np
 import torch
 ## from .geometry import CandidateEnumerator, ConeState, GlobalAction, apply_action #geometry.py
 ## from .graph import build_pyg_graph #graph.py
-from utils import Cone, ConeLatticeGraph
+from graph import ConeLatticeGraph
+from network import network, EMBEDDING_SIZE, validActionMask
 
 latticeId = int
 
@@ -46,22 +47,34 @@ class SearchResult:
     root_value: float
     temperature: float
 
+    ## gives array of visit probabilities based on AlphaZero-style policy output
+    @property 
+    def visit_probs(self) -> np.ndarray:
+        counts = self.visit_counts.astype(np.float64)
+        if counts.sum() == 0:
+            return counts
+        
+        if self.temperature <= 1e-8:
+            pi = np.zeros_like(counts)
+            pi[np.argmax(counts)] = 1.0
+            return pi
+        
+        counts = counts ** (1.0/self.temperature)
+        pi = counts / counts.sum()
+        return pi
+
     ## finds the index of the best action to take, based on AlphaZero visit count formula. 
     @property
     def best_action(self) -> latticeId:
         if len(self.visit_counts) == 0:
            raise ValueError("no actions in search result")
-
-        counts = self.visit_counts.astype(np.float64)
+        
+        pi = self.visit_probs
 
         if self.temperature <= 1e-8:
-            return self.actions[np.argmax(counts)]
-        
-        counts = counts ** (1.0/self.temperature)
-        pi = counts / counts.sum()
+            return self.actions[np.argmax(pi)]
 
         rng = np.random.default_rng()
-
         return self.actions[int(rng.choice(len(pi), p = pi))]
 
 ## Small AlphaZero-style PUCT search for the cone environment.
@@ -167,17 +180,22 @@ class MCTS:
     @torch.no_grad()
     def _evaluate_state(self, state: ConeLatticeGraph) -> Tuple[List[latticeId], np.ndarray, float]:
         
-        actions = [latticeId for latticeId, _ in state.listLatticePoints()]
-        
-        state.listLatticePoints()
-        if len(actions) == 0:
-            return [], np.zeros(0, dtype=np.float64), 0.0
+        if state.isDecomposed():
+            return [], np.zeros(0, dtype = np.float64,), 0.0
 
-        self.model.eval()
+        state.addGlobalNode(n = EMBEDDING_SIZE)
         data = state.to(self.device)
-        priors, value = self.model(data) ## change once we finish policy + value heads
-        priors = priors.detach().cpu().numpy().astype(np.float64).reshape(-1)
-        value = float(value.detach().cpu().reshape(-1)[0])
+        self.model.eval()
+
+        out = self.model(data)
+        log_p = out["log_p"] ## retrieve log-probabilities of available actions
+        value = out["value"]
+
+        valid_action_idx = validActionMask(data).nonzero(as_tuple = False).flatten().tolist()
+        actions = [state._lattice_idx_to_id[i] for i in valid_action_idx]
+
+        priors = log_p.exp().detach().cpu().numpy().astype(np.float64).reshape(-1)
+        value = float(value.detach().cpu().reshape(-1)[0]) ## move to cpu and flatten to a scalar
         return actions, priors, value
 
 
@@ -204,4 +222,44 @@ class MCTS:
         return int(np.argmax(scores))
 
 
+def main():
+    import copy
+    from coneEnvironment import Cone
+    torch.manual_seed(0)
 
+    def fresh_root() -> ConeLatticeGraph:
+        g = ConeLatticeGraph(dimension=3)
+        g.addConeNode(Cone(((1, 0, 0), (0, 1, 0), (1, 1, 7))))  # det 7 -> mult 7, singular
+        return g
+
+    # Model metadata MUST include the readout 'graph' node, so to_hetero compiles
+    # its branch and forward can read x_dict['graph'].
+    meta_graph = fresh_root()
+    meta_graph.addGlobalNode(n=EMBEDDING_SIZE)
+    model = network(meta_graph.metadata(), hidden=64,
+                    embedding_size=EMBEDDING_SIZE, num_layers=4)
+    model.eval()
+
+    mcts = MCTS(model, num_simulations=1000, c_puct=1.5)
+
+    # (1) leaf evaluator in isolation
+    actions, priors, value = mcts._evaluate_state(fresh_root())
+    print("actions:", actions)
+    print("priors :", priors, " sum =", round(float(priors.sum()), 6))
+    print("value  :", value)
+    assert len(actions) == priors.shape[0], "action/prior length mismatch"
+    assert len(actions) == 0 or abs(priors.sum() - 1.0) < 1e-5, "priors not normalized"
+
+    # (2) full PUCT search
+    result = mcts.run(fresh_root(), temperature=1.0, add_root_noise=False)
+    print("visit counts:", result.visit_counts, " total =", int(result.visit_counts.sum()))
+    print("root value  :", result.root_value)
+    print("best action :", result.best_action)
+    assert result.visit_counts.sum() == mcts.num_simulations, "every sim should touch one root action"
+    assert result.best_action in result.actions
+
+    print("OK: leaf eval normalized, search ran, visit counts conserved.")
+
+
+if __name__ == "__main__":
+    main()

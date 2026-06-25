@@ -6,10 +6,11 @@ from torch_geometric.data import HeteroData
 from coneEnvironment import *
 import torch
 import random
+import copy
 
 Vector = tuple[int, ...]
 
-DIMENSION: int = 7
+DIMENSION: int = 2
 
 def conesAdjacent(coneA: "Cone", coneB: "Cone") -> bool:
     shared = set(coneA.rays) & set(coneB.rays)
@@ -175,10 +176,15 @@ class ConeLatticeGraph(HeteroData):
     
     def addConeCandidateEdges(self, coneId: int, cone: Cone) -> None:
         for point in cone.extraneousSet():
-            if isPrimitiveNonzero(point):
-                latticeId = self.getOrCreateLatticeNode(point)
-                barycentric = cone.barycentricCoords(point)
-                self.addContainsEdge(coneId, latticeId, barycentric)
+            if not isPrimitiveNonzero(point):
+                continue
+
+            barycentric = cone.barycentricCoords(point)
+            if sum(1 for b in barycentric if b != 0) < 2:
+                continue
+            
+            latticeId = self.getOrCreateLatticeNode(point)
+            self.addContainsEdge(coneId, latticeId, barycentric)
 
     def addConeNode(self, cone: "Cone") -> int:
         coneId = self._next_cone_id
@@ -323,9 +329,42 @@ class ConeLatticeGraph(HeteroData):
                 return False
         return True
     
+    ## returns current valid actions via latticeId
     def getValidActions(self) -> list[int]:
         ei = self['lattice', 'contains', 'cone'].edge_index
         return list(set(self._lattice_idx_to_id[i] for i in ei[0].tolist()))
+
+    ## Adds a virtual global node with connections to all nodes in the graph
+    def addGlobalNode(self, n: int) -> None:
+        self['graph'].x = torch.zeros(1, n)         
+        for ntype in ('cone', 'generator', 'lattice'):
+            if ntype not in self.node_types:
+                continue
+            num = self[ntype].num_nodes
+            if not num:
+                continue
+            src = torch.arange(num)
+            dst = torch.zeros(num, dtype=torch.long)  
+            self[ntype, 'to', 'graph'].edge_index = torch.stack([src, dst])
+    
+    ## Creates a deep copy of the current graph. 
+    def copy(self) -> "ConeLatticeGraph":
+        new = ConeLatticeGraph(dimension=self._dimension)
+        for store, src in [(new['cone'], self['cone']), (new['lattice'], self['lattice'])]:
+            store.x = src.x.clone()
+        for rel in [('cone','adjacent','cone'),
+                    ('cone','contains','lattice'),
+                    ('lattice','contains','cone')]:
+            new[rel].edge_index = self[rel].edge_index.clone()
+            if 'edge_attr' in self[rel]:
+                new[rel].edge_attr = self[rel].edge_attr.clone()
+        for name in ('_cone_id_to_idx','_cone_idx_to_id','_cone_objects',
+                     '_coord_to_lattice_id','_lattice_id_to_idx','_lattice_idx_to_id',
+                     '_lattice_id_to_coord'):
+            setattr(new, name, copy.deepcopy(getattr(self, name)))
+        new._next_cone_id = self._next_cone_id
+        new._next_lattice_id = self._next_lattice_id
+        return new
 
 def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
     if numOps is None:
