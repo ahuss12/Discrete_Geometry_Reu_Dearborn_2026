@@ -30,8 +30,10 @@ Vector = tuple[int, ...]
 ## The virtual node is always node index 0 and is created in __init__.
 class CGLGraph(HeteroData):
 
-    def __init__(self):
+    def __init__(self, dimension: int = DIMENSION):
         super().__init__()
+
+        self._dimension: int = dimension
 
         ## cone bookkeeping
         self._cone_id_to_idx: dict[int, int]  = {}
@@ -56,10 +58,10 @@ class CGLGraph(HeteroData):
         ## tracks existing (genId, latticeId) pairs to prevent duplicate gen-lattice edges
         self._gen_lattice_edge_set: set[tuple[int, int]] = set()
 
-        ## all node feature vectors are shape (DIMENSION,)
-        self['cone'].x      = torch.empty((0, DIMENSION), dtype=torch.float)
-        self['generator'].x = torch.empty((0, DIMENSION), dtype=torch.float)
-        self['lattice'].x   = torch.empty((0, DIMENSION), dtype=torch.float)
+        ## all node feature vectors are shape (_dimension,)
+        self['cone'].x      = torch.empty((0, self._dimension), dtype=torch.float)
+        self['generator'].x = torch.empty((0, self._dimension), dtype=torch.float)
+        self['lattice'].x   = torch.empty((0, self._dimension), dtype=torch.float)
 
         ## virtual node: single featureless node, always index 0
         self['virtual'].x = torch.zeros((1, 0), dtype=torch.float)
@@ -84,7 +86,7 @@ class CGLGraph(HeteroData):
         feat = []
         for _ in range(n):
             feat.append(mult)
-        while len(feat) < DIMENSION:
+        while len(feat) < self._dimension:
             feat.append(0.0)
         return torch.tensor(feat, dtype=torch.float)
 
@@ -92,7 +94,7 @@ class CGLGraph(HeteroData):
         feat = []
         for x in coord:
             feat.append(float(x))
-        while len(feat) < DIMENSION:
+        while len(feat) < self._dimension:
             feat.append(0.0)
         return torch.tensor(feat, dtype=torch.float)
 
