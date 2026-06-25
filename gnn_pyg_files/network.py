@@ -110,7 +110,7 @@ class policyHead(nn.Module):
         x = F.gelu(self.fc1(x))
         return self.fc2(x).squeeze(-1)
 
-## provides a boolean (Tensor) mask of valid actions for the current state.
+## provides a boolean (Tensor) mask of valid actions for the current state. Returns in idx order. 
 def validActionMask(data) -> torch.Tensor:
     ei = data['lattice', 'contains', 'cone'].edge_index
     n = data['lattice'].num_nodes
