@@ -79,7 +79,7 @@ def alphazero_cost_loss(
         #    log-probabilities over action nodes
 
         #out["value"]:
-            graph-level value prediction
+            # graph-level value prediction
 
     #Required batch fields:
      #   batch[action_node_type].target_policy:
