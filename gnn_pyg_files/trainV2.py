@@ -11,7 +11,8 @@ from torch_geometric.loader import DataLoader
 from tqdm import trange
 
 from coneEnvironment import Cone
-from graph import ConeLatticeGraph, generateRandomCone, DIMENSION
+from graph import generateRandomCone
+from CGLGraph import CGLGraph, DIMENSION
 from mctsV2 import MCTS
 from replay import ReplayBuffer
 from network import *
@@ -24,14 +25,14 @@ def self_play_episode(
     model: torch.nn.Module, ## evaluation model
     max_steps: int, ## maximum subdivisions that can be applied before timing out
     mcts_sims: int,
-    initial_state: ConeLatticeGraph, 
+    initial_state: CGLGraph, 
     device: torch.device,
     temperature: float = 1.0,
     c_puct: float = 1.5,
     timeout_penalty: float = 0.0, 
     dirichlet_alpha: Optional[float] = None,
     dirichlet_eps: float = 0.25,
-) -> List[ConeLatticeGraph]:
+) -> List[CGLGraph]:
     states = []
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
@@ -70,7 +71,6 @@ def self_play_episode(
 
     for t, state in enumerate(states):
         remaining_cost = float(horizon - t) + tail_cost
-        state.addGlobalNode(n = EMBEDDING_SIZE)
         attach_targets(state, target_policy = policies[t], actions = action_options_history[t], target_value = -remaining_cost) ##NOTE: this may need to be changed to +remaining cost
         if len(state.getValidActions()) > 0:
             examples.append(state)
@@ -78,7 +78,7 @@ def self_play_episode(
 
     
 ## attaches the training (policy, value) targets for the GNN to learn. idx order to match policyHead output. 
-def attach_targets(graph: ConeLatticeGraph, *, target_policy: np.ndarray, actions: list[int], target_value: float) -> None:
+def attach_targets(graph: CGLGraph, *, target_policy: np.ndarray, actions: list[int], target_value: float) -> None:
     valid_idx = validActionMask(graph).nonzero(as_tuple=False).flatten().tolist() ##idx of currently valid actions
     mask_order_ids = [graph._lattice_idx_to_id[i] for i in valid_idx]
 
@@ -97,13 +97,13 @@ def attach_targets(graph: ConeLatticeGraph, *, target_policy: np.ndarray, action
     graph.y_value = torch.tensor([target_value], dtype = torch.float)   # shape (1,) -> batches to (B,)
     
 ## takes in a graph with a single cone, and returns the number of steps to subdivide the cone using the min-sum heuristic. 
-def min_sum(graph: ConeLatticeGraph):
-    cones = Cone(graph.listCones[0])
-    count = 0
-    while any(cone.isSingular() for cone in cones): 
-    
-    
-    cone.isSingular():
+#def min_sum(graph: CGLGraph):
+#    cones = Cone(graph.listCones[0])
+#    count = 0
+#    while any(cone.isSingular() for cone in cones): 
+#    
+#    
+#    cone.isSingular():
 
 
 
@@ -188,6 +188,7 @@ def main() -> None:
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
     parser.add_argument("--dirichlet-alpha", type=float, default=None)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
+    parser.add_argument("--embedding-size", type=int,default=7)
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -205,13 +206,13 @@ def main() -> None:
     device = torch.device(args.device)
 
     ## let the network learn be initialized to the structure of the graph
-    dummy_cone = Cone(generateRandomCone(n = EMBEDDING_SIZE, d = args.det_max))
-    meta_state = ConeLatticeGraph(dimension = EMBEDDING_SIZE)
+    dummy_cone = Cone(generateRandomCone(n = DIMENSION, d = args.det_max))
+    meta_state = CGLGraph()
     meta_state.addConeNode(dummy_cone)
-    meta_state.addGlobalNode(n = EMBEDDING_SIZE)
-    model = network(meta_state.metadata(),
+    model = network(
+        meta_state.metadata(),
         hidden=args.hidden_dim,
-        embedding_size=EMBEDDING_SIZE,
+        embedding_size=args.embedding_size,
         num_layers=args.num_blocks,
         dropout=args.dropout,
     ).to(device)
@@ -238,7 +239,7 @@ def main() -> None:
     for i in range(args.episodes):
         n = rng.randint(2, DIMENSION)
         d = rng.randint(2, args.det_max)
-        g = ConeLatticeGraph(dimension = DIMENSION)
+        g = CGLGraph()
         g.addConeNode(Cone(generateRandomCone(n,d)))
         training_examples.append(g)
 
