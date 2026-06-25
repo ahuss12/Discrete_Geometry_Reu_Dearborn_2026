@@ -248,7 +248,8 @@ class CGLGraph(HeteroData):
             self.addConeGeneratorEdge(coneId, genId)
 
     def wireConeLattice(self, coneId: int, cone: Cone) -> None:
-        for point in cone.extraneousSet():
+        points, _ = cone.extraneousSet()
+        for point in points:
             if not isPrimitiveNonzero(point):
                 continue
             latticeId   = self.getOrCreateLatticeNode(point)
