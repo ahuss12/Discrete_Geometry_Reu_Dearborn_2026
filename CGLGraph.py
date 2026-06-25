@@ -11,72 +11,15 @@ DIMENSION: int = 4  ## set to 4 for testing, 7 in final
 
 Vector = tuple[int, ...]
 
-def primitive(v: Vector) -> Vector:
-    gcd = math.gcd(*v)
-    if gcd == 0:
-        raise ValueError("zero vector not allowed")
-    return tuple(x // gcd for x in v)
-
-def extendedEuclid(a: int, b: int) -> tuple[int, int, int]:
-    old_r, r = a, b
-    old_s, s = 1, 0
-    old_t, t = 0, 1
-    while r != 0:
-        q = old_r // r
-        old_r, r = r, old_r - q * r
-        old_s, s = s, old_s - q * s
-        old_t, t = t, old_t - q * t
-    if old_r < 0:
-        old_r, old_s, old_t = -old_r, -old_s, -old_t
-    return old_r, old_s, old_t
-
-def intDet(M: tuple[Vector, ...]) -> int:
-    M = [list(row) for row in M]
-    n = len(M)
-    sign, prev = 1, 1
-    for k in range(n - 1):
-        if M[k][k] == 0:
-            for r in range(k + 1, n):
-                if M[r][k] != 0:
-                    M[r], M[k] = M[k], M[r]
-                    sign *= -1
-                    break
-            else:
-                return 0
-        for i in range(k + 1, n):
-            for j in range(k + 1, n):
-                M[i][j] = (M[i][j] * M[k][k] - M[i][k] * M[k][j]) // prev
-            M[i][k] = 0
-        prev = M[k][k]
-    return sign * M[-1][-1]
-
-def canonicalForm(M: list[list[int]]) -> list[list[int]]:
-    n = len(M)
-    for j in range(n):
-        for i in range(j + 1, n):
-            if M[i][j] == 0:
-                continue
-            g, a, b = extendedEuclid(M[j][j], M[i][j])
-            rowJ = [a * M[j][col] + b * M[i][col] for col in range(n)]
-            rowI = [-(M[i][j] // g) * M[j][col] + (M[j][j] // g) * M[i][col] for col in range(n)]
-            M[j], M[i] = rowJ, rowI
-        if M[j][j] < 0:
-            M[j] = [-x for x in M[j]]
-    for j in range(n):
-        for i in range(j):
-            quotient = M[i][j] // M[j][j]
-            if quotient:
-                M[i] = [M[i][col] - quotient * M[j][col] for col in range(n)]
-    return M
-
 def isPrimitiveNonzero(point: Vector) -> bool:
     return math.gcd(*point) == 1
 
 
-## Heterogeneous graph over a fan with three node types:
+## Heterogeneous graph over a fan with four node types:
 ##   cone      - feature: multiplicity repeated n times, zero-padded to DIMENSION
 ##   generator - feature: coordinate vector, zero-padded to DIMENSION
 ##   lattice   - feature: coordinate vector, zero-padded to DIMENSION
+##   virtual   - no features (single virtual node connected to every cone)
 ##
 ## Edge types:
 ##   (cone, has, generator)         - cone uses this ray as a generator
@@ -86,9 +29,12 @@ def isPrimitiveNonzero(point: Vector) -> bool:
 ##   (generator, reaches, lattice)  - with edge_attr: scalar barycentric coord λ_i
 ##   (lattice, reached_by, generator) - reverse, same edge_attr
 ##   (cone, adjacent, cone)         - share >= 2 generator nodes (both directions)
+##   (virtual, overview, cone)       - virtual node -> every cone
+##   (cone, summary, virtual)        - reverse
 ##
 ## Generator and lattice nodes are globally unique by coordinate.
 ## Generator-lattice edges are permanent once created.
+## The virtual node is always node index 0 and is created in __init__.
 class CGLGraph(HeteroData):
 
     def __init__(self):
@@ -122,6 +68,9 @@ class CGLGraph(HeteroData):
         self['generator'].x = torch.empty((0, DIMENSION), dtype=torch.float)
         self['lattice'].x   = torch.empty((0, DIMENSION), dtype=torch.float)
 
+        ## virtual node: single featureless node, always index 0
+        self['virtual'].x = torch.zeros((1, 0), dtype=torch.float)
+
         self['cone',      'has',        'generator'].edge_index = torch.empty((2, 0), dtype=torch.long)
         self['generator', 'of',         'cone'     ].edge_index = torch.empty((2, 0), dtype=torch.long)
         self['cone',      'contains',   'lattice'  ].edge_index = torch.empty((2, 0), dtype=torch.long)
@@ -131,6 +80,8 @@ class CGLGraph(HeteroData):
         self['lattice',   'reached_by', 'generator'].edge_index = torch.empty((2, 0), dtype=torch.long)
         self['lattice',   'reached_by', 'generator'].edge_attr  = torch.empty((0, 1), dtype=torch.float)
         self['cone',      'adjacent',   'cone'     ].edge_index = torch.empty((2, 0), dtype=torch.long)
+        self['virtual',    'overview',   'cone'     ].edge_index = torch.empty((2, 0), dtype=torch.long)
+        self['cone',      'summary',    'virtual'   ].edge_index = torch.empty((2, 0), dtype=torch.long)
 
     ## --- feature computation ---
 
@@ -253,6 +204,21 @@ class CGLGraph(HeteroData):
         newEdges = torch.tensor([[idxA, idxB], [idxB, idxA]], dtype=torch.long)
         self['cone', 'adjacent', 'cone'].edge_index = torch.cat([ei, newEdges], dim=1)
 
+    def addVirtualConeEdge(self, coneId: int) -> None:
+        ## virtual node is always index 0; connects to every cone
+        coneIdx = self._cone_id_to_idx[coneId]
+
+        ei = self['virtual', 'overview', 'cone'].edge_index
+        if ((ei[0] == 0) & (ei[1] == coneIdx)).any():
+            return
+
+        newFwd = torch.tensor([[0], [coneIdx]], dtype=torch.long)
+        self['virtual', 'overview', 'cone'].edge_index = torch.cat([ei, newFwd], dim=1)
+
+        ei     = self['cone', 'summary', 'virtual'].edge_index
+        newBwd = torch.tensor([[coneIdx], [0]], dtype=torch.long)
+        self['cone', 'summary', 'virtual'].edge_index = torch.cat([ei, newBwd], dim=1)
+
     ## --- edge removal ---
 
     def removeAllConeGeneratorEdges(self, coneId: int) -> None:
@@ -314,6 +280,7 @@ class CGLGraph(HeteroData):
 
         self.wireConeGenerators(coneId, cone)  ## must precede wireConeLattice
         self.wireConeLattice(coneId, cone)
+        self.addVirtualConeEdge(coneId)         ## connect new cone to virtual node
 
         return coneId
 
@@ -327,6 +294,8 @@ class CGLGraph(HeteroData):
 
         self.wireConeGenerators(coneId, cone)  ## must precede wireConeLattice
         self.wireConeLattice(coneId, cone)
+        ## virtual edge is retained: overwrite keeps the same coneId/coneIdx,
+        ## so the existing virtual <-> cone edges remain valid and are not re-added
 
     ## --- adjacency queries ---
 
@@ -370,7 +339,7 @@ class CGLGraph(HeteroData):
             newConeIds = [coneId]
 
             for cone in results[1:]:
-                newConeIds.append(self.addConeNode(cone))
+                newConeIds.append(self.addConeNode(cone))  ## addConeNode calls addVirtualConeEdge
 
             ## all new cones mutually adjacent (they all share the subdivision point as a generator)
             for i in range(len(newConeIds)):
@@ -405,6 +374,7 @@ class CGLGraph(HeteroData):
         data['cone'].x      = self['cone'].x.clone()
         data['generator'].x = self['generator'].x.clone()
         data['lattice'].x   = self['lattice'].x.clone()
+        data['virtual'].x    = self['virtual'].x.clone()
 
         edgeTypes = [
             ('cone',      'has',        'generator'),
@@ -414,6 +384,8 @@ class CGLGraph(HeteroData):
             ('generator', 'reaches',    'lattice'  ),
             ('lattice',   'reached_by', 'generator'),
             ('cone',      'adjacent',   'cone'     ),
+            ('virtual',    'overview',   'cone'     ),
+            ('cone',      'summary',    'virtual'   ),
         ]
         for key in edgeTypes:
             data[key].edge_index = self[key].edge_index.clone()
@@ -441,6 +413,11 @@ class CGLGraph(HeteroData):
         for lid in sorted(self._lattice_id_to_idx):
             coord = self._lattice_id_to_coord[lid]
             print(f"  Lattice {lid}: coord={coord}")
+
+        print("\n=== Virtual node -> Cone edges ===")
+        ei = self['virtual', 'overview', 'cone'].edge_index
+        coneIdxs = ei[1].tolist()
+        print(f"  Virtual -> cones: {sorted(self._cone_idx_to_id[i] for i in coneIdxs)}")
 
         print("\n=== Cone adjacency ===")
         ei = self['cone', 'adjacent', 'cone'].edge_index
@@ -519,14 +496,21 @@ def main():
     ## subdivision point should no longer be a valid action
     print(f"Subdivision point no longer a valid action: {latticeId not in g.getValidActions()}")
 
+    ## virtual node should be connected to all cones
+    ei = g['virtual', 'overview', 'cone'].edge_index
+    connectedConeIdxs = set(ei[1].tolist())
+    allConeIdxs = set(g._cone_id_to_idx[cid] for cid in g._cone_id_to_idx)
+    print(f"Virtual node connected to all cones: {connectedConeIdxs == allConeIdxs}")
+
     ## toHeteroData should work
     data = g.toHeteroData()
     print(f"\ntoHeteroData shapes:")
     print(f"  cone.x:      {data['cone'].x.shape}")
     print(f"  generator.x: {data['generator'].x.shape}")
     print(f"  lattice.x:   {data['lattice'].x.shape}")
-    print(f"  cone-adj edge_index: {data['cone','adjacent','cone'].edge_index.shape}")
+    print(f"  virtual.x:   {data['virtual'].x.shape}")
+    print(f"  cone-adj edge_index:      {data['cone','adjacent','cone'].edge_index.shape}")
+    print(f"  virtual-overview edge_index: {data['virtual','overview','cone'].edge_index.shape}")
 
 
 main()
-
