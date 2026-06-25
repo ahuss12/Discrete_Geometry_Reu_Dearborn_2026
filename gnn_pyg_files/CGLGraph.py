@@ -394,6 +394,58 @@ class CGLGraph(HeteroData):
                 data[key].edge_attr = store.edge_attr.clone()
 
         return data
+    
+    def copy(self) -> "CGLGraph":
+        new = CGLGraph()
+
+        ## node features
+        new['cone'].x      = self['cone'].x.clone()
+        new['generator'].x = self['generator'].x.clone()
+        new['lattice'].x   = self['lattice'].x.clone()
+        new['virtual'].x   = self['virtual'].x.clone()
+
+        ## edges (indices + optional attrs)
+        edgeTypes = [
+            ('cone',      'has',        'generator'),
+            ('generator', 'of',         'cone'     ),
+            ('cone',      'contains',   'lattice'  ),
+            ('lattice',   'in',         'cone'     ),
+            ('generator', 'reaches',    'lattice'  ),
+            ('lattice',   'reached_by', 'generator'),
+            ('cone',      'adjacent',   'cone'     ),
+            ('virtual',   'overview',   'cone'     ),
+            ('cone',      'summary',    'virtual'  ),
+        ]
+        for key in edgeTypes:
+            new[key].edge_index = self[key].edge_index.clone()
+            store = self[key]
+            if hasattr(store, 'edge_attr') and store.edge_attr is not None:
+                new[key].edge_attr = store.edge_attr.clone()
+
+        ## cone bookkeeping (Cone is frozen/immutable, so shared by reference)
+        new._cone_id_to_idx = dict(self._cone_id_to_idx)
+        new._cone_idx_to_id = dict(self._cone_idx_to_id)
+        new._next_cone_id   = self._next_cone_id
+        new._cone_objects   = dict(self._cone_objects)
+
+        ## generator bookkeeping
+        new._coord_to_gen_id = dict(self._coord_to_gen_id)
+        new._gen_id_to_idx   = dict(self._gen_id_to_idx)
+        new._gen_idx_to_id   = dict(self._gen_idx_to_id)
+        new._gen_id_to_coord = dict(self._gen_id_to_coord)
+        new._next_gen_id     = self._next_gen_id
+
+        ## lattice bookkeeping
+        new._coord_to_lattice_id = dict(self._coord_to_lattice_id)
+        new._lattice_id_to_idx   = dict(self._lattice_id_to_idx)
+        new._lattice_idx_to_id   = dict(self._lattice_idx_to_id)
+        new._lattice_id_to_coord = dict(self._lattice_id_to_coord)
+        new._next_lattice_id     = self._next_lattice_id
+
+        ## gen-lattice edge set
+        new._gen_lattice_edge_set = set(self._gen_lattice_edge_set)
+
+        return new
 
     ## --- debug printing ---
 
