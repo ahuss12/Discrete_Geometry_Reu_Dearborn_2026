@@ -71,6 +71,17 @@ class GNN(nn.Module):
                     x = x + residual
         return x
 
+## Adds a virtual global node with connections to all nodes in the graph
+def addGlobalNode(graph: ConeLatticeGraph, n: int = padding_level) -> None:
+    graph['global'].x = torch.zeros(1, n)         
+    for ntype in ('cone', 'generator', 'lattice'):
+        num = graph[ntype].num_nodes
+        if not num:
+            continue
+        src = torch.arange(num)
+        dst = torch.zeros(num, dtype=torch.long)  
+        graph[ntype, 'to', 'global'].edge_index = torch.stack([src, dst])
+    return graph
 
 ## gives an embedding of the entire graph based on the node-level embedding output from GNN
 def graphEmbed(embeddings: dict[str, Tensor]) -> Tensor:
