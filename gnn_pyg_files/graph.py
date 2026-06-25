@@ -323,9 +323,23 @@ class ConeLatticeGraph(HeteroData):
                 return False
         return True
     
+    ## returns current valid actions via latticeId
     def getValidActions(self) -> list[int]:
         ei = self['lattice', 'contains', 'cone'].edge_index
         return list(set(self._lattice_idx_to_id[i] for i in ei[0].tolist()))
+
+    ## Adds a virtual global node with connections to all nodes in the graph
+    def addGlobalNode(self, n: int) -> None:
+        self['graph'].x = torch.zeros(1, n)         
+        for ntype in ('cone', 'generator', 'lattice'):
+            if ntype not in self.node_types:
+                continue
+            num = self[ntype].num_nodes
+            if not num:
+                continue
+            src = torch.arange(num)
+            dst = torch.zeros(num, dtype=torch.long)  
+            self[ntype, 'to', 'graph'].edge_index = torch.stack([src, dst])
 
 def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
     if numOps is None:
