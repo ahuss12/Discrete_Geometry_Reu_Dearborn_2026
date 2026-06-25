@@ -52,7 +52,7 @@ class GNN(nn.Module):
             conv = GraphConv(in_num, out_num)
             self.convs.append(conv)
         
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, edge_weight):
         """
         Args: 
             - x:          (N, feature_size)  node features
@@ -63,7 +63,7 @@ class GNN(nn.Module):
         """
         for i, conv in enumerate(self.convs):
             residual = x
-            x = conv(x, edge_index)
+            x = conv(x, edge_index, edge_weight)
             if i < len(self.convs) - 1:
                 x = F.gelu(self.norms[i](x))
                 x = self.dropouts[i](x)

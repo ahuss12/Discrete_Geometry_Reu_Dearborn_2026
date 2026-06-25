@@ -95,6 +95,17 @@ def attach_targets(graph: ConeLatticeGraph, *, target_policy: np.ndarray, action
 
     graph['lattice'].y_policy = y_policy
     graph.y_value = torch.tensor([target_value], dtype = torch.float)   # shape (1,) -> batches to (B,)
+    
+## takes in a graph with a single cone, and returns the number of steps to subdivide the cone using the min-sum heuristic. 
+def min_sum(graph: ConeLatticeGraph):
+    cones = Cone(graph.listCones[0])
+    count = 0
+    while any(cone.isSingular() for cone in cones): 
+    
+    
+    cone.isSingular():
+
+
 
 ## NOTE: added warning when total_loss/max(steps,1) = 0.0 is returned, as this may seem like a good loss. 
 def train_one_epoch(

@@ -181,3 +181,12 @@ class Cone:
                 generators[i] = p
                 fan.append(Cone.buildCone(generators))
         return fan
+
+## divides a list of cones through a lattice point. All cones that contain that lattice point in their FPP are subdivided. 
+def fanSubdivide(fan: list["Cone"], p: Vector) -> list["Cone"]:
+    for i, cone in enumerate(fan):
+        if cone.contains(p):
+            new_cones = cone.subdivide(p)
+            del fan[i]
+            fan += new_cones
+    return fan
