@@ -1,19 +1,12 @@
 import math
-from sympy import Matrix, linsolve
-from dataclasses import dataclass
-from functools import cached_property
-from fractions import Fraction
 from torch_geometric.data import HeteroData
-from coneEnvironment import *
+from Cone import Cone
+from utils import isPrimitiveNonzero
 import torch
 
 DIMENSION: int = 4  ## set to 4 for testing, 7 in final
 
 Vector = tuple[int, ...]
-
-def isPrimitiveNonzero(point: Vector) -> bool:
-    return math.gcd(*point) == 1
-
 
 ## Heterogeneous graph over a fan with four node types:
 ##   cone      - feature: multiplicity repeated n times, zero-padded to DIMENSION
