@@ -9,8 +9,8 @@ from torch_geometric.data import HeteroData
 from torch_geometric.loader import DataLoader
 from tqdm import trange
 
-from utils import generateRandomCone, validActionMask
-from Cone import Cone
+from utils import generateRandomCone, validActionMask, isPrimitiveNonzero
+from Cone import Cone, fanSubdivide
 from CGLGraph import CGLGraph, DIMENSION
 from mcts import MCTS
 from replay import ReplayBuffer
@@ -47,14 +47,39 @@ def attach_targets(
     graph['lattice'].y_policy = y_policy
     graph.y_value = torch.tensor([target_value], dtype = torch.float)   # shape (1,) -> batches to (B,)
 
-## takes in a graph with a single cone, and returns the number of steps to subdivide the cone using the min-sum heuristic. 
-#def min_sum(graph: CGLGraph):
-#    cones = Cone(graph.listCones[0])
-#    count = 0
-#    while any(cone.isSingular() for cone in cones): 
-#    
-#    
-#    cone.isSingular():
+## takes in a graph with a single cone, and returns (steps, cones, actions) where steps is the number of steps to resolve, 
+## cones are the final cone state, and actions are the subdivisions applied. 
+## min-sum ties are broken arbitrarily. 
+def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
+    cones = list(graph._cone_objects.values())
+    step_count = 0
+    actions = []
+
+    ## stores dict (extraneous set points, barycentric lambdas) for each Cone observed. Used for quick lookup
+    extraneous_set_cache: dict["Cone", dict[Vector, tuple]] = {}
+    ## retrieves (points, lambdas) or adds to dict if not yet there
+    def extraneous(cone):
+        d = extraneous_set_cache.get(cone)
+        if d is None:
+            pts, lams = cone.extraneousSet()
+            d = {p: lam for p, lam in zip(pts, lams) if isPrimitiveNonzero(p)}
+            extraneous_set_cache[cone] = d
+        return d
+
+    while any(cone.isSingular for cone in cones): 
+        data = [(c.multiplicity, extraneous(c)) for c in cones] ## tuple(mult, dict(points, lambdas))
+        total = sum(mult for mult, _ in data) ## mult across all cones
+        det_sum = {p: total for _, d in data for p in d} ## intiialize all points to total det
+
+        for mult, d in data:
+            for point, lambdas in d.items():
+                det_sum[point] -= int(mult * (1 - sum(lambdas)))
+        
+        subdivision_point = min(det_sum, key = det_sum.get)
+        cones = fanSubdivide(cones, subdivision_point)
+        step_count += 1
+        actions.append(subdivision_point)
+    return step_count, cones, actions
 
 # ===========================================================================================
 #  TRAINING LOOP
@@ -114,7 +139,9 @@ def self_play_episode(
 
     for t, state in enumerate(states):
         remaining_cost = float(horizon - t) + tail_cost
-        attach_targets(state, target_policy = policies[t], actions = action_options_history[t], target_value = -remaining_cost) ##NOTE: this may need to be changed to +remaining cost
+        steps, _, _ = min_sum(state)
+        reward = steps - remaining_cost
+        attach_targets(state, target_policy = policies[t], actions = action_options_history[t], target_value = reward) ##NOTE: this may need to be changed to +remaining cost
         if len(state.getValidActions()) > 0:
             examples.append(state)
     return examples
