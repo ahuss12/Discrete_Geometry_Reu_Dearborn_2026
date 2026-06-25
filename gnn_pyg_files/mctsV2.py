@@ -1,13 +1,9 @@
-## PRIORS IS NOW P! 
-
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
-## from .geometry import CandidateEnumerator, ConeState, GlobalAction, apply_action #geometry.py
-## from .graph import build_pyg_graph #graph.py
-from graph import ConeLatticeGraph
+from CGLGraph import CGLGraph
 from network import network, EMBEDDING_SIZE, validActionMask
 
 latticeId = int
@@ -16,7 +12,7 @@ latticeId = int
 ## and Q is the mean action-value. 
 @dataclass
 class MCTSNode:
-    state: ConeLatticeGraph ## changed to utils.py graph held as state
+    state: CGLGraph 
     prev_action: Optional[latticeId] = None ## latticeId subdivided through to reach this state
     expanded: bool = False
     actions: List[latticeId] = field(default_factory=list) ## index -> latticeId
@@ -31,19 +27,11 @@ class MCTSNode:
     def visit_count(self) -> int:
         return int(self.N.sum()) if self.N.size else 0
 
-   ## update q-values with q = W/N 
-    ##def q_values(self) -> np.ndarray:
-    ##    q = np.zeros_like(self.W, dtype=np.float64)
-    ##    mask = self.N > 0
-    ##    q[mask] = self.W[mask] / self.N[mask]
-    ##    return q
-
 ## outputs action to take from the initial state, based on the MCTS run. Output is in the form of latticeId for the state graph. 
 @dataclass(frozen=True)
 class SearchResult:
-    actions: List[latticeId] ## changed to latticeID instead of GlobalAction
+    actions: List[latticeId] 
     visit_counts: np.ndarray ## visit counts of children nodes from current state
-    ## visit_probs: np.ndarray
     root_value: float
     temperature: float
 
@@ -83,7 +71,6 @@ class MCTS:
     def __init__(
         self,
         model: torch.nn.Module,
-        ## enumerator: CandidateEnumerator,
         *,
         num_simulations: int = 64,
         c_puct: float = 1.5,
@@ -92,11 +79,11 @@ class MCTS:
         device: Optional[torch.device | str] = None,
     ) -> None:
         self.model = model
-        ## self.enumerator = enumerator
         self.num_simulations = int(num_simulations)
         self.c_puct = float(c_puct)
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = float(dirichlet_eps)
+
         if device is None:
             try:
                 device = next(model.parameters()).device
@@ -105,7 +92,7 @@ class MCTS:
         self.device = torch.device(device)
 
     ## Runs the MCTS for num_simulations trials and outputs a SearchResult object (which can itself be called to give the final action choice)
-    def run(self, root_state: ConeLatticeGraph, *, temperature: float = 1.0, add_root_noise: bool = False) -> SearchResult:
+    def run(self, root_state: CGLGraph, *, temperature: float = 1.0, add_root_noise: bool = False) -> SearchResult:
         root = MCTSNode(state = root_state)
         root_value = self._expand(root)
         if root.P.size == 0:
@@ -138,12 +125,8 @@ class MCTS:
                     curr_state.subdivide(node.actions[action_index])
                     node.children[action_index] = MCTSNode(state = curr_state, prev_action = node.actions[action_index])
 
-                #    child_state = apply_action(node.state, node.actions[action_index])
-                #    node.children[action_index] = MCTSNode(child_state)
-
                 node = node.children[action_index]
                     
-
             # Backup. The leaf_value is from the leaf state. Crossing one edge
             # back to the parent adds reward -1 for the subdivision action.
             ret = leaf_value
@@ -159,13 +142,6 @@ class MCTS:
     ## Expands a leaf node, adding outward edges for all possible subdivision actions. Return estimated value of current state. 
     def _expand(self, node: MCTSNode) -> float:
         node.expanded = True
-        ##if node.state.isDecomposed():
-        ##    node.P = np.zeros(0, dtype = np.float64)
-        ##    node.N = np.zeros(0, dtype = np.int64)
-        #    node.W = np.zeros(0, dtype = np.float64)
-        #    node.Q = np.zeros(0, dtype = np.float64)
-        #    return 0.0
-
         actions, priors, value = self._evaluate_state(node.state)
         node.actions = actions
         node.P = priors
@@ -178,40 +154,24 @@ class MCTS:
 
     ## retrieves next actions, prior probabilities, and estimated value from a forward pass of the GNN. 
     @torch.no_grad()
-    def _evaluate_state(self, state: ConeLatticeGraph) -> Tuple[List[latticeId], np.ndarray, float]:
+    def _evaluate_state(self, state: CGLGraph) -> Tuple[List[latticeId], np.ndarray, float]:
         
         if state.isDecomposed():
             return [], np.zeros(0, dtype = np.float64,), 0.0
 
-        state.addGlobalNode(n = EMBEDDING_SIZE)
-        data = state.to(self.device)
+        ## data = state.to(self.device)
         self.model.eval()
 
-        out = self.model(data)
+        out = self.model(state)
         log_p = out["log_p"] ## retrieve log-probabilities of available actions
         value = out["value"]
 
-        valid_action_idx = validActionMask(data).nonzero(as_tuple = False).flatten().tolist()
+        valid_action_idx = validActionMask(state).nonzero(as_tuple = False).flatten().tolist()
         actions = [state._lattice_idx_to_id[i] for i in valid_action_idx]
 
         priors = log_p.exp().detach().cpu().numpy().astype(np.float64).reshape(-1)
         value = float(value.detach().cpu().reshape(-1)[0]) ## move to cpu and flatten to a scalar
         return actions, priors, value
-
-
-
-        ##data, actions = build_pyg_graph(state, self.enumerator)
-        ##if len(actions) == 0:
-        ##   return [], np.zeros(0, dtype=np.float64), 0.0
-        ##self.model.eval()
-        ##data = data.to(self.device)
-        ##out = self.model(data)
-        ##logits = out["logits"].detach().cpu()
-        ##priors = torch.softmax(logits, dim=0).numpy().astype(np.float64)
-        ##priors = priors / max(float(priors.sum()), 1e-12)
-        ##cost = float(out["cost"].detach().cpu().view(-1)[0].item())
-        ##value = -cost
-        ##return actions, priors, value
 
     ## PUCT action selection for tree traversal
     def _select_action(self, node: MCTSNode) -> latticeId:
@@ -227,15 +187,12 @@ def main():
     from coneEnvironment import Cone
     torch.manual_seed(0)
 
-    def fresh_root() -> ConeLatticeGraph:
-        g = ConeLatticeGraph(dimension=3)
+    def fresh_root() -> CGLGraph:
+        g = CGLGraph()
         g.addConeNode(Cone(((1, 0, 0), (0, 1, 0), (1, 1, 7))))  # det 7 -> mult 7, singular
         return g
 
-    # Model metadata MUST include the readout 'graph' node, so to_hetero compiles
-    # its branch and forward can read x_dict['graph'].
     meta_graph = fresh_root()
-    meta_graph.addGlobalNode(n=EMBEDDING_SIZE)
     model = network(meta_graph.metadata(), hidden=64,
                     embedding_size=EMBEDDING_SIZE, num_layers=4)
     model.eval()
