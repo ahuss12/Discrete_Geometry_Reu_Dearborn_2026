@@ -207,7 +207,8 @@ def main() -> None:
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
     parser.add_argument("--dirichlet-alpha", type=float, default=None)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
-    parser.add_argument("--embedding-size", type=int,default=7)
+    parser.add_argument("--embedding-size", type=int, default=7)
+    parser.add_argument("--padding", type=int, default=7)
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -225,8 +226,8 @@ def main() -> None:
     device = torch.device(args.device)
 
     ## let the network learn be initialized to the structure of the graph
-    dummy_cone = Cone(generateRandomCone(n = DIMENSION, d = args.det_max))
-    meta_state = CGLGraph()
+    dummy_cone = Cone(generateRandomCone(n = args.padding, d = args.det_max))
+    meta_state = CGLGraph(dimension = args.padding)
     meta_state.addConeNode(dummy_cone)
     model = network(
         meta_state.metadata(),
@@ -248,17 +249,18 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     replay = ReplayBuffer(capacity=args.replay_capacity, seed=args.seed)
 
-    print(
-        f"device={device} mcts_sims={args.mcts_sims} c_puct={args.c_puct} "
-        f"temperature={args.temperature} timeout_penalty={args.timeout_penalty} "
-    )
+    args_dict = vars(args)
+    width = max(len(k) for k in args_dict)
+    print("config:")
+    for k in sorted(args_dict):
+        print(f"  {k:<{width}} = {args_dict[k]}")
 
     ## generate semirandom training examples
     training_examples = []
     for i in range(args.episodes):
-        n = rng.randint(2, DIMENSION)
+        n = rng.randint(2, args.padding)
         d = rng.randint(2, args.det_max)
-        g = CGLGraph()
+        g = CGLGraph(dimension = args.padding)
         g.addConeNode(Cone(generateRandomCone(n,d)))
         training_examples.append(g)
 

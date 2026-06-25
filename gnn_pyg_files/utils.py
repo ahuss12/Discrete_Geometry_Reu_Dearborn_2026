@@ -160,7 +160,6 @@ def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ..
             result = []
             for row in M:
                 result.append(tuple(row))
-            print(retryTimes)
             return result
 
 # Append to the bottom of the module (same file as the functions under test),

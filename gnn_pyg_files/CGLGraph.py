@@ -392,7 +392,7 @@ class CGLGraph(HeteroData):
         return data
     
     def copy(self) -> "CGLGraph":
-        new = CGLGraph()
+        new = CGLGraph(dimension = self._dimension)
 
         ## node features
         new['cone'].x      = self['cone'].x.clone()
