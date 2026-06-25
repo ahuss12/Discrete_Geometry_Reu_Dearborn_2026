@@ -3,8 +3,10 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
+
+from utils import validActionMask
 from CGLGraph import CGLGraph
-from network import network, EMBEDDING_SIZE, validActionMask
+from network import network
 
 latticeId = int
 
@@ -183,8 +185,7 @@ class MCTS:
 
 
 def main():
-    import copy
-    from coneEnvironment import Cone
+    from Cone import Cone
     torch.manual_seed(0)
 
     def fresh_root() -> CGLGraph:
@@ -194,7 +195,7 @@ def main():
 
     meta_graph = fresh_root()
     model = network(meta_graph.metadata(), hidden=64,
-                    embedding_size=EMBEDDING_SIZE, num_layers=4)
+                    embedding_size=7, num_layers=4)
     model.eval()
 
     mcts = MCTS(model, num_simulations=1000, c_puct=1.5)
