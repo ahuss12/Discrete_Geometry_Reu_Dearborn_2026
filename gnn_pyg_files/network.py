@@ -1,5 +1,6 @@
-from coneEnvironment import *
-from CGLGraph import *
+from Cone import Cone
+from CGLGraph import CGLGraph
+from utils import validActionMask, _batch_vectors
 
 import torch
 from torch import nn, Tensor
@@ -9,7 +10,7 @@ from torch_geometric.nn import HeteroConv, GATv2Conv
 from torch_geometric.utils import softmax
 
 
-EMBEDDING_SIZE = 7 ## what length we want our embedding vectors (for nodes) to be. 
+EMBEDDING_SIZE = 7 ## default embedding length
 
 ## Our GNN uses GATv2Conv layers + GeLU activation. 
 class GNN(nn.Module):
@@ -93,33 +94,6 @@ class policyHead(nn.Module):
         x = self.norm(x)
         x = F.gelu(self.fc1(x))
         return self.fc2(x).squeeze(-1)
-
-## provides a boolean (Tensor) mask of valid actions for the current state. Returns in idx order. 
-def validActionMask(data) -> torch.Tensor:
-    ei = data['lattice', 'in', 'cone'].edge_index
-    n = data['lattice'].num_nodes
-    mask = torch.zeros(n, dtype=torch.bool, device=data['lattice'].x.device)
-    mask[ei[0]] = True
-    return mask
-
-## returns a dictionary with key = node type, value = vector of length (# nodes of that type) where the entries are the batch that node belongs to. 
-## also returns B, the number of batches.
-def _batch_vectors(data) -> tuple[dict, int]:
-    batch_dict, B = {}, 1
-    for node_type in data.x_dict:
-        store = data[node_type]
-        b = getattr(store, "batch", None) ## vector with batch number of each node of node_type
-
-        ## default to batch = 0 if no batch attribute
-        if b is None:
-            b = torch.zeros(store.num_nodes, dtype = torch.long, device = store.x.device)
-        
-        batch_dict[node_type] = b
-
-        if b.numel():
-            B = max(B, int(b.max().item()) + 1) ## cautious maximum, sets B to the maximum observed batch number so far
-
-    return batch_dict, B
 
 class network(nn.Module):
     def __init__(self, metadata, hidden: int = 64, embedding_size: int = EMBEDDING_SIZE, num_layers: int = 4, dropout: float = 0.1):
