@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from fractions import Fraction
 from torch_geometric.data import HeteroData
+from gnn_pyg_files.coneEnvironment import *
 import torch
 
 DIMENSION: int = 4  ## set to 4 for testing, 7 in final
@@ -67,95 +68,6 @@ def canonicalForm(M: list[list[int]]) -> list[list[int]]:
             if quotient:
                 M[i] = [M[i][col] - quotient * M[j][col] for col in range(n)]
     return M
-
-
-@dataclass(frozen=True)
-class Cone:
-    rays: tuple[Vector, ...]
-
-    @classmethod
-    def buildCone(cls, rays) -> "Cone":
-        n = len(rays)
-        if not rays:
-            raise ValueError("need at least one generator")
-        rays = tuple(sorted(primitive(tuple(r)) for r in rays))
-        if any(all(x == 0 for x in r) for r in rays):
-            raise ValueError("generators cannot be zero vector")
-        if any(len(r) != n for r in rays):
-            raise ValueError("cone must be full dimensional")
-        if Matrix(rays).rank() != n:
-            raise ValueError("cone must be simplicial")
-        return cls(rays)
-
-    @property
-    def dimension(self) -> int:
-        return len(self.rays[0])
-
-    @property
-    def numGenerators(self) -> int:
-        return len(self.rays)
-
-    @property
-    def isSingular(self) -> bool:
-        return self.multiplicity != 1
-
-    @cached_property
-    def multiplicity(self) -> int:
-        return abs(intDet(self.rays))
-
-    def barycentricCoords(self, p: Vector) -> tuple[Fraction, ...]:
-        A = Matrix(self.rays).T
-        b = Matrix(p)
-        (coords,) = linsolve((A, b))
-        coords = tuple(Fraction(c.p, c.q) for c in coords)
-        if any(x < 0 for x in coords):
-            raise ValueError("point p must be in the cone")
-        return coords
-
-    def contains(self, p: Vector) -> bool:
-        A = Matrix(self.rays).T
-        b = Matrix(p)
-        (coords,) = linsolve((A, b))
-        if any(x < 0 for x in tuple(coords)):
-            return False
-        return True
-
-    def extraneousSet(self) -> list[Vector]:
-        n = len(self.rays)
-        A = [[r[j] for r in self.rays] for j in range(n)]
-        H = canonicalForm([row[:] for row in A])
-        lambdas = [[Fraction(i, H[-1][-1])] for i in range(H[-1][-1])]
-        for i in reversed(range(n - 1)):
-            newLambdas = []
-            for curr in lambdas:
-                s = sum(curr[col - (i + 1)] * H[i][col] for col in range(i + 1, n))
-                for k in range(H[i][i]):
-                    newLambdas.append([Fraction(math.ceil(s) - s + k, H[i][i])] + curr)
-            lambdas = newLambdas
-        lambdas = [
-            tuple(int(math.sumprod(A[i], vec)) for i in range(n))
-            for vec in lambdas
-        ]
-        return lambdas
-
-    ## minimal change: wrap buildCone in try/except to silently skip degenerate
-    ## (zero-determinant) cones that arise during stellar subdivision
-    def subdivide(self, p: Vector) -> list["Cone"]:
-        p = primitive(p)
-        coords = self.barycentricCoords(p)
-        if sum(1 for c in coords if c > 0) == 1:
-            raise ValueError("subdividing point cannot lie on a generating ray")
-        fan = []
-        for i in range(len(coords)):
-            if coords[i] > 0:
-                generators = list(self.rays)
-                generators[i] = p
-                try:
-                    fan.append(Cone.buildCone(generators))
-                except ValueError:
-                    pass  ## degenerate cone, skip
-        return fan
-
 
 def isPrimitiveNonzero(point: Vector) -> bool:
     return math.gcd(*point) == 1
@@ -223,7 +135,7 @@ class CGLGraph(HeteroData):
     ## --- feature computation ---
 
     def computeConeFeature(self, cone: Cone) -> torch.Tensor:
-        n    = cone.dimension
+        n    = len(cone.rays[0])
         mult = float(cone.multiplicity)
         feat = []
         for _ in range(n):
