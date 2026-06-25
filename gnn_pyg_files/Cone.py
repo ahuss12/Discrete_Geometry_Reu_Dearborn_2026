@@ -32,6 +32,10 @@ class Cone:
             raise ValueError("cone must be simplicial")
 
         return cls(rays)
+    
+    ## makes sure that if the cone is constructed by bypassing the constructor that rays are stored in the correct format. 
+    def __post_init__(self):
+        object.__setattr__(self, "rays", tuple(tuple(r) for r in self.rays))
 
     @property
     def dimension(self) -> int:
@@ -71,7 +75,8 @@ class Cone:
 
         return True
 
-    def extraneousSet(self) -> list[Vector]:
+    ## returns a tuple, first is a list of extraneous set points, and second is the barycentric coordinates of those points. 
+    def extraneousSet(self) -> tuple[list[Vector], list[Vector]]:
         n = len(self.rays)
         A = [[r[j] for r in self.rays] for j in range(n)]
         H = canonicalForm([row[:] for row in A])
@@ -86,12 +91,16 @@ class Cone:
                     newLambdas.append([Fraction(math.ceil(s) - s + k, H[i][i])] + curr)
             lambdas = newLambdas
 
-        lambdas = [
+        vectors = [
             tuple(int(math.sumprod(A[i], vec)) for i in range(n))
             for vec in lambdas
         ]
 
-        return lambdas
+        ## don't return the zero vector
+        z = vectors.index((0,) * n)  
+        del vectors[z], lambdas[z]
+
+        return vectors, lambdas
 
     def HNF(self) -> "Cone":
         n = len(self.rays)
@@ -118,14 +127,17 @@ class Cone:
 #  FAN OPERATIONS
 # ===========================================================================================
 
-## divides a list of cones through a lattice point. All cones that contain that lattice point in their FPP are subdivided. 
+## divides a list of cones through a lattice point. All cones that contain that lattice point are subdivided . 
 def fanSubdivide(fan: list["Cone"], p: Vector) -> list["Cone"]:
-    for i, cone in enumerate(fan):
+    p = primitive(p)
+    new_cones = []
+    for cone in fan:
         if cone.contains(p):
-            new_cones = cone.subdivide(p)
-            del fan[i]
-            fan += new_cones
-    return fan
+            new_cones += cone.subdivide(p)
+        else:
+            new_cones.append(cone)
+    return new_cones
+
 
 # ===========================================================================================
 #  TESTING
@@ -138,14 +150,14 @@ def main():
     assert smooth.multiplicity == 1
     assert smooth.isSingular is False
     # extraneous set of a nonsingular cone is {0} only
-    assert smooth.extraneousSet() == [(0, 0)]
+    assert smooth.extraneousSet() == ([], [])
 
     # ---- singular 2D cone: σ = <(1,0),(1,2)>, mult(σ)=2 ----
     sing = Cone.buildCone([(1, 0), (1, 2)])
     assert sing.multiplicity == 2
     assert sing.isSingular is True
     # |extraneous set| = mult(σ) = det(σ)
-    assert len(sing.extraneousSet()) == sing.multiplicity == 2
+    assert len(sing.extraneousSet()[0]) == sing.multiplicity - 1 == 1
 
     # barycentricCoords: express a generator -> standard basis coord
     assert sing.barycentricCoords((1, 0)) == (Fraction(1), Fraction(0))
@@ -157,7 +169,7 @@ def main():
 
     # ---- stellar subdivision through an extraneous (irreducible*) point ----
     # K \ {0} is nonempty since σ is singular; subdivide through such a w.
-    w = next(v for v in sing.extraneousSet() if any(c != 0 for c in v))
+    w = next(v for v in sing.extraneousSet()[0] if any(c != 0 for c in v))
     star = sing.subdivide(w)
     # Subdivision Multiplicity Lemma: mult(δ_h) = λ_h · mult(σ),
     # so the refinement's multiplicities sum to mult(σ).
