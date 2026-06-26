@@ -23,6 +23,7 @@ class MCTSNode:
     W: np.ndarray = field(default_factory = lambda: np.zeros((0,), dtype = np.float64)) 
     Q: np.ndarray = field(default_factory = lambda: np.zeros((0,), dtype = np.float64)) 
     children: Dict[latticeId, "MCTSNode"] = field(default_factory = dict) ## pair (action, MCTS node with resulting graph)
+    potential: Optional[float] = None   # cached estimated value = log_det_sum(state)
 
     ## retrieves N, or 0 if empty. 
     @property
@@ -64,8 +65,7 @@ class SearchResult:
         if self.temperature <= 1e-8:
             return self.actions[np.argmax(pi)]
 
-        rng = np.random.default_rng()
-        return self.actions[int(rng.choice(len(pi), p = pi))]
+        return self.actions[int(np.random.choice(len(pi), p = pi))]
 
 ## Small AlphaZero-style PUCT search for the cone environment.
 ## cost C(s), the search uses V(s) = -C(s). Each subdivision has reward -1.
@@ -79,12 +79,14 @@ class MCTS:
         dirichlet_alpha: Optional[float] = None,
         dirichlet_eps: float = 0.25,
         device: Optional[torch.device | str] = None,
+        terminal_reward: int
     ) -> None:
         self.model = model
         self.num_simulations = int(num_simulations)
         self.c_puct = float(c_puct)
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = float(dirichlet_eps)
+        self.terminal_reward = terminal_reward
 
         if device is None:
             try:
@@ -111,14 +113,14 @@ class MCTS:
 
             while True:
                 if node.state.isDecomposed():
-                    leaf_value = 0.0
+                    leaf_value = self.terminal_reward
                     break
                 if not node.expanded:
                     leaf_value = self._expand(node)
                     break
-                if node.P.size == 0:
-                    leaf_value = 0.0
-                    break
+                ##if node.P.size == 0: ## NOTE: is this check even necessary? don't know if this situation can happen
+                ##    leaf_value = 0.0  if not node.state.isDecomposed() else self.terminal_reward 
+                ##    break
 
                 action_index = self._select_action(node)
                 path.append((node, action_index))
@@ -196,9 +198,10 @@ def main():
     meta_graph = fresh_root()
     model = network(meta_graph.metadata(), hidden=64,
                     embedding_size=7, num_layers=4)
+    model(fresh_root())
     model.eval()
 
-    mcts = MCTS(model, num_simulations=1000, c_puct=1.5)
+    mcts = MCTS(model, num_simulations=1000, c_puct=1.5, terminal_reward = 6)
 
     # (1) leaf evaluator in isolation
     actions, priors, value = mcts._evaluate_state(fresh_root())
