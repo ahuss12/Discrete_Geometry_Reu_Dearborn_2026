@@ -561,4 +561,5 @@ def main():
     print(f"  virtual-overview edge_index: {data['virtual','overview','cone'].edge_index.shape}")
 
 
-main()
+if __name__ == "__main__":
+    main()
