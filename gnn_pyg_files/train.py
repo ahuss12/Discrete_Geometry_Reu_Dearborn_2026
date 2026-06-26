@@ -159,7 +159,7 @@ def self_play_episode(
         if resolved:
             reward = float(baseline_steps_taken - agent_steps_taken)
         else: 
-            reward = float(timeout_penalty)
+            reward = float(-timeout_penalty)
 
         rewards.append(reward)
 
@@ -252,7 +252,7 @@ def main() -> None:
     parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--timeout-penalty", type=float, default=1.0)
+    parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--det-max", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -368,6 +368,11 @@ def main() -> None:
                     device=device,
                     value_weight=args.value_weight,
                 )
+            diag.log_train(
+                episode=ep,
+                loss=metrics["loss"],
+                policy_loss=metrics["policy_loss"],
+                value_loss=metrics["value_loss"])
             if (ep + 1) % max(1, args.episodes // 20) == 0:
                 print(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
                 
