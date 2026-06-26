@@ -1,6 +1,7 @@
 import math
 import random
 import torch
+from fractions import Fraction
 
 Vector = tuple[int, ...]
 
@@ -79,6 +80,62 @@ def canonicalForm(M: list[list[int]]) -> list[list[int]]:
 
     return M
 
+## exact solve Ax = b, where A is a matrix and b a vector. Return vector x as a tuple of fractions. 
+def linsolve(A: list[list[int]], b:list[int]) -> tuple[Fraction,...]:
+    m = len(A)
+    if m == 0:
+        return ()
+
+    n = len(A[0])
+    M = [[Fraction(x) for x in row] + [Fraction(rhs)] for row, rhs in zip(A, b)]
+
+    row = 0
+    for col in range(n):
+        # Find pivot
+        pivot = None
+        for r in range(row, m):
+            if M[r][col] != 0:
+                pivot = r
+                break
+        if pivot is None:
+            continue
+
+        # Swap pivot row into place
+        M[row], M[pivot] = M[pivot], M[row]
+
+        # Normalize pivot row
+        pivot_val = M[row][col]
+        for j in range(col, n + 1):
+            M[row][j] /= pivot_val
+
+        # Eliminate all other rows
+        for r in range(m):
+            if r == row:
+                continue
+            factor = M[r][col]
+            if factor != 0:
+                for j in range(col, n + 1):
+                    M[r][j] -= factor * M[row][j]
+
+        row += 1
+        if row == m:
+            break
+
+    # Check for inconsistency
+    for r in range(m):
+        if all(M[r][c] == 0 for c in range(n)) and M[r][n] != 0:
+            raise ValueError("System is inconsistent.")
+
+    # Require a unique solution
+    if row < n:
+        raise ValueError("System does not have a unique solution.")
+
+    return tuple(M[i][n] for i in range(n))
+
+# ## sum of log of determinants of each cone in the fan
+# def log_det_sum(state) -> float:
+#     return sum(math.log2(c.multiplicity) for c in state._cone_objects.values())
+
 # ===========================================================================================
 #  GRAPH NEURAL NETWORK HELPER FUNCTIONS
 # ===========================================================================================
@@ -114,9 +171,12 @@ def _batch_vectors(data) -> tuple[dict, int]:
 #  TRAINING LOOP HELPER FUNCTIONS
 # ===========================================================================================
 
-def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ...]]:
+def generateRandomCone(n: int, d: int, numOps: int = None, rng = None) -> list[tuple[int, ...]]:
     if numOps is None:
         numOps = n * n * 10
+
+    if rng is None:
+        rng = random
     
     retryTimes = 0
 
@@ -136,9 +196,9 @@ def generateRandomCone(n: int, d: int, numOps: int = None) -> list[tuple[int, ..
         M[n-1][n-1] = d
 
         for _ in range(numOps):
-            i, j = random.sample(range(n), 2)
-            sign = random.choice([-1, 1])
-            if random.random() < 0.5:
+            i, j = rng.sample(range(n), 2)
+            sign = rng.choice([-1, 1])
+            if rng.random() < 0.5:
                 ## row op: row[i] += ±1 * row[j]
                 for k in range(n):
                     M[i][k] += sign * M[j][k]
@@ -245,12 +305,20 @@ def _test_gnn_helpers():
     assert B == 1 and set(bd) == {'lattice', 'cone'}
     assert bd['lattice'].tolist() == [0, 0, 0, 0]
 
+def _test_linsolve():
+    tests = [([[1, 0], [0, 1]], [3, 5], (Fraction(3), Fraction(5))),
+    ([[2, 1], [1, -1]], [5, 1], (Fraction(2), Fraction(1))),
+    ([[2, 1], [1, 2]], [1, 1], (Fraction(1, 3), Fraction(1, 3))),
+    ([[2, 1, -1], [-3, -1, 2], [-2, 1, 2]], [8, -11, -3], (Fraction(2), Fraction(3), Fraction(-1)))]
+
+    for A, b, expected in tests:
+        assert expected == linsolve(A, b)
 
 def main():
     tests = [
         _test_primitive, _test_isPrimitiveNonzero, _test_extendedEuclid,
         _test_intDet, _test_canonicalForm, _test_generateRandomCone,
-        _test_gnn_helpers,
+        _test_gnn_helpers, _test_linsolve
     ]
     for t in tests:
         t()
