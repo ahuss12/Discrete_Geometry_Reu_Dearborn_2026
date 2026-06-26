@@ -1,0 +1,52 @@
+config:
+  batch_size      = 16
+  c_puct          = 1.5
+  det_max         = 10
+  device          = cpu
+  diag_dir        = diag_probe
+  dirichlet_alpha = 0.3
+  dirichlet_eps   = 0.25
+  dropout         = 0.05
+  embedding_size  = 7
+  episodes        = 60
+  epochs_per_iter = 1
+  hidden_dim      = 64
+  lr              = 0.0003
+  max_dimension   = 4
+  max_steps       = 30
+  mcts_sims       = 50
+  num_blocks      = 4
+  replay_capacity = 50000
+  resume          = 
+  save            = cone_action_gnn.pt
+  seed            = 0
+  temperature     = 1.0
+  timeout_penalty = 5.0
+  value_weight    = 0.1
+self-play:   0%|          | 0/60 [00:00<?, ?it/s]self-play:   2%|▏         | 1/60 [00:00<00:54,  1.07it/s]self-play:   7%|▋         | 4/60 [00:01<00:11,  4.83it/s]self-play:  10%|█         | 6/60 [00:02<00:27,  1.94it/s]self-play:  12%|█▏        | 7/60 [00:03<00:26,  2.00it/s]self-play:  15%|█▌        | 9/60 [00:03<00:16,  3.06it/s]self-play:  17%|█▋        | 10/60 [00:04<00:26,  1.86it/s]self-play:  18%|█▊        | 11/60 [00:06<00:36,  1.35it/s]self-play:  22%|██▏       | 13/60 [00:06<00:22,  2.07it/s]self-play:  23%|██▎       | 14/60 [00:07<00:31,  1.45it/s]self-play:  25%|██▌       | 15/60 [00:07<00:25,  1.79it/s]self-play:  27%|██▋       | 16/60 [00:10<00:45,  1.04s/it]self-play:  28%|██▊       | 17/60 [00:10<00:34,  1.25it/s]self-play:  30%|███       | 18/60 [00:11<00:38,  1.09it/s]self-play:  32%|███▏      | 19/60 [00:12<00:31,  1.30it/s]self-play:  33%|███▎      | 20/60 [00:12<00:23,  1.72it/s]self-play:  35%|███▌      | 21/60 [00:12<00:17,  2.26it/s]self-play:  37%|███▋      | 22/60 [00:13<00:22,  1.68it/s]self-play:  38%|███▊      | 23/60 [00:15<00:42,  1.14s/it]self-play:  40%|████      | 24/60 [00:15<00:29,  1.20it/s]self-play:  42%|████▏     | 25/60 [00:15<00:22,  1.59it/s]self-play:  43%|████▎     | 26/60 [00:16<00:20,  1.69it/s]self-play:  45%|████▌     | 27/60 [00:19<00:41,  1.27s/it]self-play:  47%|████▋     | 28/60 [00:19<00:31,  1.02it/s]self-play:  48%|████▊     | 29/60 [00:20<00:25,  1.20it/s]self-play:  50%|█████     | 30/60 [00:20<00:19,  1.56it/s]self-play:  52%|█████▏    | 31/60 [00:21<00:24,  1.16it/s]self-play:  53%|█████▎    | 32/60 [00:21<00:18,  1.52it/s]self-play:  55%|█████▌    | 33/60 [00:21<00:13,  1.99it/s]self-play:  57%|█████▋    | 34/60 [00:22<00:10,  2.45it/s]self-play:  58%|█████▊    | 35/60 [00:22<00:08,  2.91it/s]self-play:  60%|██████    | 36/60 [00:22<00:09,  2.58it/s]self-play:  62%|██████▏   | 37/60 [00:23<00:07,  3.21it/s]self-play:  63%|██████▎   | 38/60 [00:23<00:05,  4.01it/s]self-play:  67%|██████▋   | 40/60 [00:23<00:03,  5.52it/s]self-play:  68%|██████▊   | 41/60 [00:23<00:03,  4.77it/s]self-play:  70%|███████   | 42/60 [00:23<00:03,  5.44it/s]self-play:  72%|███████▏  | 43/60 [00:24<00:07,  2.14it/s]self-play:  73%|███████▎  | 44/60 [00:26<00:12,  1.26it/s]self-play:  75%|███████▌  | 45/60 [00:26<00:08,  1.68it/s]self-play:  77%|███████▋  | 46/60 [00:26<00:06,  2.21it/s]self-play:  78%|███████▊  | 47/60 [00:27<00:05,  2.38it/s]self-play:  80%|████████  | 48/60 [00:27<00:04,  2.87it/s]self-play:  82%|████████▏ | 49/60 [00:28<00:05,  2.13it/s]self-play:  83%|████████▎ | 50/60 [00:28<00:03,  2.78it/s]self-play:  85%|████████▌ | 51/60 [00:30<00:09,  1.04s/it]self-play:  87%|████████▋ | 52/60 [00:30<00:06,  1.32it/s]self-play:  88%|████████▊ | 53/60 [00:31<00:04,  1.51it/s]self-play:  90%|█████████ | 54/60 [00:33<00:06,  1.06s/it]self-play:  92%|█████████▏| 55/60 [00:33<00:03,  1.29it/s]self-play:  93%|█████████▎| 56/60 [00:33<00:02,  1.70it/s]self-play:  95%|█████████▌| 57/60 [00:39<00:06,  2.32s/it]self-play:  97%|█████████▋| 58/60 [00:40<00:03,  1.66s/it]self-play:  98%|█████████▊| 59/60 [00:40<00:01,  1.24s/it]self-play: 100%|██████████| 60/60 [00:40<00:00,  1.02it/s]self-play: 100%|██████████| 60/60 [00:40<00:00,  1.47it/s]
+ep=6 replay=24 metrics={'loss': 1.5651189684867859, 'policy_loss': 1.106141984462738, 'value_loss': 4.589769959449768}
+ep=9 replay=31 metrics={'loss': 1.3113788962364197, 'policy_loss': 0.9308779239654541, 'value_loss': 3.8050092458724976}
+ep=12 replay=48 metrics={'loss': 1.5300056139628093, 'policy_loss': 1.0146358807881672, 'value_loss': 5.15369709332784}
+ep=15 replay=63 metrics={'loss': 1.7288299798965454, 'policy_loss': 1.0294624865055084, 'value_loss': 6.993674874305725}
+ep=18 replay=84 metrics={'loss': 1.8394807577133179, 'policy_loss': 1.1258459091186523, 'value_loss': 7.136348366737366}
+ep=21 replay=91 metrics={'loss': 1.8422774970531464, 'policy_loss': 1.0986148715019226, 'value_loss': 7.436626076698303}
+ep=24 replay=109 metrics={'loss': 1.8781019747257233, 'policy_loss': 1.0416103899478912, 'value_loss': 8.364915609359741}
+ep=27 replay=129 metrics={'loss': 1.9443200528621674, 'policy_loss': 1.223022222518921, 'value_loss': 7.21297824382782}
+ep=30 replay=141 metrics={'loss': 1.8058404326438904, 'policy_loss': 1.0451665073633194, 'value_loss': 7.6067394614219666}
+ep=33 replay=155 metrics={'loss': 1.8512307405471802, 'policy_loss': 1.0200552344322205, 'value_loss': 8.311754584312439}
+ep=36 replay=165 metrics={'loss': 1.7795142233371735, 'policy_loss': 1.1334083080291748, 'value_loss': 6.461059093475342}
+ep=39 replay=169 metrics={'loss': 1.5897418856620789, 'policy_loss': 1.1713744401931763, 'value_loss': 4.183674067258835}
+ep=42 replay=175 metrics={'loss': 1.56472709774971, 'policy_loss': 0.9848970472812653, 'value_loss': 5.798300266265869}
+ep=45 replay=193 metrics={'loss': 1.6773486733436584, 'policy_loss': 1.135126918554306, 'value_loss': 5.422217547893524}
+ep=48 replay=201 metrics={'loss': 1.8579901158809662, 'policy_loss': 1.0726681053638458, 'value_loss': 7.853219628334045}
+ep=51 replay=221 metrics={'loss': 1.7302430868148804, 'policy_loss': 1.1115012466907501, 'value_loss': 6.187418341636658}
+ep=54 replay=236 metrics={'loss': 1.5356539189815521, 'policy_loss': 1.0124407559633255, 'value_loss': 5.232131361961365}
+ep=57 replay=259 metrics={'loss': 1.5643249154090881, 'policy_loss': 1.1405160129070282, 'value_loss': 4.238089144229889}
+ep=60 replay=268 metrics={'loss': 1.7115910947322845, 'policy_loss': 1.1528028845787048, 'value_loss': 5.587881922721863}
+saved cone_action_gnn.pt
+diagnostics written to diag_probe/:
+  optimality_gap     = diag_probe/optimality_gap.png
+  value_calibration  = diag_probe/value_calibration.png
+  episode_csv        = diag_probe/episode_quality.csv
+  calibration_csv    = diag_probe/value_calibration.csv
+  trajectories       = diag_probe/trajectories.jsonl
