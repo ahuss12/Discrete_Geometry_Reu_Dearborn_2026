@@ -1,7 +1,10 @@
 from __future__ import annotations
 import argparse
 import random
-from typing import List
+from typing import List, Optional
+from diagnostics import Diagnostics, extract_value
+from trajectory_log import TrajectoryLogger
+import os
 
 import numpy as np
 import torch
@@ -16,6 +19,8 @@ from mcts import MCTS
 from replay import ReplayBuffer
 from network import network
 from losses import alphazero_cost_loss
+
+Vector = tuple[int, ...]
 
 # ===========================================================================================
 #  HELPER FUNCTIONS
@@ -99,15 +104,31 @@ def self_play_episode(
     c_puct: float = 1.5,
     timeout_penalty: float = 0.0, 
     dirichlet_alpha: Optional[float] = None,
-    dirichlet_eps: float = 0.25
+    dirichlet_eps: float = 0.25,
+    diag: Optional["Diagnostics"] = None, # for logging
+    traj: Optional["TrajectoryLogger"] = None, # for logging 
+    episode_idx: int = -1 # for logging
     ) -> List[CGLGraph]:
     states = []
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
 
+    ## Warning: For data visualization - straight from Claude
+    ## =======================================================================================
+    root_cone = next(iter(initial_state._cone_objects.values()))
+    root_n = len(root_cone.rays[0])
+    root_mult = int(root_cone.multiplicity)
+    resolved = False
+    root_rays = next(iter(initial_state._cone_objects.values())).rays   
+    subdivision_points = []
+    ## =======================================================================================
+
+
     state = initial_state
+    terminal_reward, baseline_fan, baseline_actions = min_sum(state)
     for _ in range(max_steps):
         if state.isDecomposed():
+            resolved = True
             break
         
         search = MCTS(
@@ -116,7 +137,8 @@ def self_play_episode(
             c_puct = c_puct,
             dirichlet_alpha = dirichlet_alpha,
             dirichlet_eps = dirichlet_eps,
-            device = device
+            device = device,
+            terminal_reward = terminal_reward
         )
         states.append(state.copy())
         result = search.run(state, temperature = temperature, add_root_noise = True)
@@ -126,7 +148,9 @@ def self_play_episode(
 
         # Training uses MCTS visit policy. The environment action can be sampled
         # for exploration or greedy for stability.
-        state.subdivide(result.best_action)
+        a = result.best_action
+        subdivision_points.append(state._lattice_id_to_coord[a])   # LOGGING
+        state.subdivide(a)
     
     examples: List[HeteroData] = []
     horizon = len(states)
@@ -137,13 +161,66 @@ def self_play_episode(
     # Therefore I added an explicit tail cost to all states from an unfinished rollout.
     tail_cost = 0.0 if state.isDecomposed() else float(timeout_penalty)
 
+    ## for data visualization
+    ## =======================================================================================
+    targets: List[float] = []
+    baseline_rays = horizon
+
+    # NEW
+    if traj is not None:
+        final_fan = [c.rays for c in state._cone_objects.values()]
+        traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
+                 final_fan=final_fan, resolved=resolved or states[-1].isDecomposed(),
+                 agent_rays=horizon, baseline_rays=terminal_reward,
+                 baseline_points=baseline_actions,                     # heuristic's inserted rays
+                 baseline_fan=[c.rays for c in baseline_fan])          # heuristic's final fan (optional)
+    ## =======================================================================================  
+
     for t, state in enumerate(states):
         remaining_cost = float(horizon - t) + tail_cost
-        steps, _, _ = min_sum(state)
-        reward = steps - remaining_cost
-        attach_targets(state, target_policy = policies[t], actions = action_options_history[t], target_value = reward) ##NOTE: this may need to be changed to +remaining cost
+
+        ## for data visualization
+        ## ===================================================================================
+        if t == 0:
+            baseline_rays = terminal_reward
+        targets.append(terminal_reward - remaining_cost)
+        ## ===================================================================================
+
+        attach_targets(state, 
+        target_policy = policies[t], 
+        actions = action_options_history[t], 
+        target_value = terminal_reward - remaining_cost) 
+
         if len(state.getValidActions()) > 0:
             examples.append(state)
+
+    ## for data visualization
+    ## =======================================================================================
+    if diag is not None:
+        ## per-episode solution quality (inserted rays vs min_sum baseline)
+        diag.log_episode(
+            episode = episode_idx, n = root_n, mult = root_mult,
+            agent_rays = horizon, baseline_rays = baseline_rays,
+            resolved = resolved or states[-1].isDecomposed()
+        )
+        ## value-head calibration: predicted value vs reward target over visited states
+        if states:
+            try:
+                was_training = model.training
+                model.eval()
+                preds: List[float] = []
+                with torch.no_grad():
+                    loader = DataLoader(states, batch_size = len(states), shuffle = False)
+                    for batch in loader:
+                        batch = batch.to(device)
+                        preds.extend(extract_value(model(batch)).tolist())
+                if was_training:
+                    model.train()
+                diag.log_calibration(episode = episode_idx, predicted = preds, target = targets)
+            except Exception as e:
+                diag.warn_calibration_once(e)
+    ## =======================================================================================
+
     return examples
 
 ## NOTE: added warning when total_loss/max(steps,1) = 0.0 is returned, as this may seem like a good loss. 
@@ -208,7 +285,8 @@ def main() -> None:
     parser.add_argument("--dirichlet-alpha", type=float, default=None)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
     parser.add_argument("--embedding-size", type=int, default=7)
-    parser.add_argument("--padding", type=int, default=7)
+    parser.add_argument("--max-dimension", type=int, default=7)
+    parser.add_argument("--diag-dir", type=str, default="diagnostics")
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -226,8 +304,8 @@ def main() -> None:
     device = torch.device(args.device)
 
     ## let the network learn be initialized to the structure of the graph
-    dummy_cone = Cone(generateRandomCone(n = args.padding, d = args.det_max))
-    meta_state = CGLGraph(dimension = args.padding)
+    dummy_cone = Cone(generateRandomCone(n = args.max_dimension, d = args.det_max, rng = rng))
+    meta_state = CGLGraph(dimension = args.max_dimension)
     meta_state.addConeNode(dummy_cone)
     model = network(
         meta_state.metadata(),
@@ -236,6 +314,11 @@ def main() -> None:
         num_layers=args.num_blocks,
         dropout=args.dropout,
     ).to(device)
+
+    meta_state = meta_state.to(device)
+    model.train()
+    model(meta_state)
+    model.zero_grad(set_to_none = True)
 
     if args.resume:
         try:
@@ -249,6 +332,12 @@ def main() -> None:
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     replay = ReplayBuffer(capacity=args.replay_capacity, seed=args.seed)
 
+    ## for data visualization
+    ## =======================================================================================
+    diag = Diagnostics(outdir=args.diag_dir)
+    traj = TrajectoryLogger(os.path.join(args.diag_dir, "trajectories.jsonl"))
+    ## =======================================================================================
+
     args_dict = vars(args)
     width = max(len(k) for k in args_dict)
     print("config:")
@@ -258,10 +347,10 @@ def main() -> None:
     ## generate semirandom training examples
     training_examples = []
     for i in range(args.episodes):
-        n = rng.randint(2, args.padding)
+        n = rng.randint(2, args.max_dimension)
         d = rng.randint(2, args.det_max)
-        g = CGLGraph(dimension = args.padding)
-        g.addConeNode(Cone(generateRandomCone(n,d)))
+        g = CGLGraph(dimension = args.max_dimension)
+        g.addConeNode(Cone(generateRandomCone(n,d, rng = rng)))
         training_examples.append(g)
 
     for ep in trange(args.episodes, desc="self-play"):
@@ -275,7 +364,10 @@ def main() -> None:
             c_puct=args.c_puct,
             timeout_penalty=args.timeout_penalty,
             dirichlet_alpha=args.dirichlet_alpha,
-            dirichlet_eps=args.dirichlet_eps
+            dirichlet_eps=args.dirichlet_eps,
+            diag=diag,
+            traj=traj,
+            episode_idx=ep
         )
 
         replay.extend(examples)
@@ -292,12 +384,22 @@ def main() -> None:
                     device=device,
                     value_weight=args.value_weight,
                 )
-            if (ep + 1) % max(1, args.episodes // 10) == 0:
+            if (ep + 1) % max(1, args.episodes // 20) == 0:
                 print(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
 
+    ## for data visualization
+    ## =======================================================================================
     torch.save({"model": model.state_dict(), "args": vars(args)}, args.save)
     print(f"saved {args.save}")
 
+    traj.close()
+    paths = diag.finish()
+    paths["trajectories"] = traj.path          # fold the JSONL into the same summary
+    print(f"diagnostics written to {args.diag_dir}/:")
+    for k, v in paths.items():
+        if v is not None:
+            print(f"  {k:<18} = {v}")
+    ## =======================================================================================
 
 if __name__ == "__main__":
     main()
