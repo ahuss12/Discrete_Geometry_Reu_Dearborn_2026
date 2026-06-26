@@ -1,9 +1,8 @@
 import math
-from sympy import Matrix, linsolve
 from dataclasses import dataclass
 from functools import cached_property
 from fractions import Fraction
-from utils import primitive, intDet, canonicalForm
+from utils import primitive, intDet, canonicalForm, linsolve
 
 Vector = tuple[int, ...]
 
@@ -28,7 +27,7 @@ class Cone:
         if any(len(r) != n for r in rays):
             raise ValueError("cone must be full dimensional")
 
-        if Matrix(rays).rank() != n:
+        if intDet(rays) == 0:
             raise ValueError("cone must be simplicial")
 
         return cls(rays)
@@ -54,22 +53,17 @@ class Cone:
         return abs(intDet(self.rays))
 
     def barycentricCoords(self, p: Vector) -> tuple[Fraction, ...]:
-        A = Matrix(self.rays).T
-        b = Matrix(p)
-        (coords,) = linsolve((A, b))
-        coords = tuple(Fraction(c.p, c.q) for c in coords)
-
+        A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]
+        b = [x for x in p]
+        coords = linsolve(A,b)
         if any(x < 0 for x in coords):
             raise ValueError("point p must be in the cone")
-
         return coords
 
     def contains(self, p: Vector) -> bool:
-        A = Matrix(self.rays).T
-        b = Matrix(p)
-        (coords,) = linsolve((A, b))
-        coords = tuple(coords)
-
+        A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]
+        b = [x for x in p]
+        coords = linsolve(A,b)
         if any(x < 0 for x in coords):
             return False
 
