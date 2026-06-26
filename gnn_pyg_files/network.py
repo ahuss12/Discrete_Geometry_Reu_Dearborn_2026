@@ -140,6 +140,7 @@ def main():
     print("node types:", meta[0])          # expect ['cone','lattice','global']
 
     net = network(meta, hidden=64, embedding_size=EMBEDDING_SIZE, num_layers=4)
+    net(graph)
     net.eval()
 
     with torch.inference_mode():
