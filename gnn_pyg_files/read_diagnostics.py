@@ -94,7 +94,7 @@ def panel_gap_curve(ax, ep: dict, w: int) -> None:
         ax.scatter(xt, [ymin - 0.5] * len(xt), s=10, marker="x", color="C3",
                    alpha=0.5, label="timed out")
     ax.set_xlabel("episode"); ax.set_ylabel("gap (agent \u2212 min_sum)")
-    ax.set_title("1. Optimality-gap learning curve\n(resolved only; lower better, <0 beats baseline)")
+    ax.set_title("1. Comparison to min_sum\n(lower better, <0 beats baseline)")
     ax.legend(fontsize=8)
 
 
@@ -262,6 +262,108 @@ def panel_dim_hist(ax, ep: dict) -> None:
     ax.set_title(f"Initial-cone dimension\n({len(n)} cones, n \u2208 [{lo}, {hi}])")
 
 
+def load_config(diag_dir: str, config_path: Optional[str],
+                checkpoint_path: Optional[str]) -> Optional[dict]:
+    """Find the run's hyperparameters. Priority:
+      1. explicit --config JSON
+      2. <diag-dir>/config.json  (if you ever dump one)
+      3. the saved checkpoint's "args" (train.py stores vars(args) there)
+    Returns None if nothing is found."""
+    import json
+    if config_path:
+        try:
+            with open(config_path) as f:
+                return dict(json.load(f))
+        except Exception as e:
+            print(f"[config] could not read {config_path}: {e}")
+
+    j = os.path.join(diag_dir, "config.json")
+    if os.path.exists(j):
+        try:
+            with open(j) as f:
+                return dict(json.load(f))
+        except Exception as e:
+            print(f"[config] could not read {j}: {e}")
+
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        try:
+            import torch  # lazy: only needed if reading args from a .pt
+            ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            if isinstance(ckpt, dict) and "args" in ckpt:
+                return dict(ckpt["args"])
+        except Exception as e:
+            print(f"[config] could not read args from {checkpoint_path}: {e}")
+    return None
+
+
+# hyperparameters worth surfacing first; the rest follow alphabetically
+_CONFIG_PRIORITY = [
+    "episodes", "mcts_sims", "max_steps", "max_dimension", "det_max",
+    "c_puct", "temperature", "dirichlet_alpha", "dirichlet_eps", "timeout_penalty",
+    "lr", "batch_size", "value_weight", "hidden_dim", "embedding_size",
+    "num_blocks", "dropout", "epochs_per_iter", "replay_capacity", "seed", "device",
+]
+
+
+def render_config(ax, cfg: Optional[dict], ncols: int = 4) -> None:
+    ax.axis("off")
+    if not cfg:
+        ax.text(0.5, 0.5, "no hyperparameters found\n"
+                "(pass --config <json> or --checkpoint <.pt>)",
+                ha="center", va="center", fontsize=10, color="gray")
+        ax.set_title("Hyperparameters", fontsize=11, loc="left")
+        return
+
+    # order: priority keys first (those present), then any remaining keys sorted
+    keys = [k for k in _CONFIG_PRIORITY if k in cfg]
+    keys += [k for k in sorted(cfg) if k not in _CONFIG_PRIORITY]
+    items = [f"{k} = {cfg[k]}" for k in keys]
+
+    width = max(len(s) for s in items)
+    items = [s.ljust(width) for s in items]
+    nrows = -(-len(items) // ncols)  # ceil
+    lines = []
+    for r in range(nrows):
+        cells = [items[r + c * nrows] for c in range(ncols) if r + c * nrows < len(items)]
+        lines.append("    ".join(cells))
+    text = "\n".join(lines)
+
+    ax.set_title("Hyperparameters", fontsize=11, loc="left")
+    ax.text(0.0, 1.0, text, ha="left", va="top", family="monospace", fontsize=8.5,
+            transform=ax.transAxes,
+            bbox=dict(boxstyle="round", facecolor="#f5f5f5", edgecolor="#cccccc"))
+
+
+def panel_reward(ax, ep: dict, w: int, timeout_penalty: float = 0.0) -> None:
+    # Raw episode return from the root: terminal_reward - (rays + tail)
+    #   = baseline_rays - agent_rays            (resolved)
+    #   = baseline_rays - agent_rays - penalty  (timed out)
+    # This is the scalar the value head is trained toward at t=0; equals -gap when resolved.
+    res = _resolved_mask(ep)
+    x = ep["episode"]
+    reward = [b - a - (0.0 if r else float(timeout_penalty))
+              for a, b, r in zip(ep["agent_rays"], ep["baseline_rays"], res)]
+
+    xr = [e for e, r in zip(x, res) if r]
+    yr = [v for v, r in zip(reward, res) if r]
+    xt = [e for e, r in zip(x, res) if not r]
+    yt = [v for v, r in zip(reward, res) if not r]
+
+    ax.axhline(0.0, color="gray", lw=1, ls="--", label="reward = 0 (ties min_sum)")
+    if xr:
+        ax.scatter(xr, yr, s=10, alpha=0.3, color="C0", label="resolved")
+    if xt:
+        ax.scatter(xt, yt, s=10, alpha=0.3, color="C3", marker="x", label="timed out")
+    ax.plot(x, rolling_mean([float(v) for v in reward], w), color="C1", lw=2,
+            label=f"rolling mean (w={w})")
+    pen = "" if not timeout_penalty else f"; timeout penalty {timeout_penalty:g}"
+    ax.set_xlabel("episode")
+    ax.set_ylabel("episode return  (terminal_reward \u2212 rays)")
+    ax.set_title(f"10. Raw episode reward over training\n"
+                 f"(higher better; >0 beats min_sum{pen})")
+    ax.legend(fontsize=8, ncol=2)
+
+
 def write_initial_cones(ep: dict, out_png: str) -> str:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     panel_mult_hist(axes[0], ep)
@@ -282,6 +384,10 @@ def main() -> None:
     ap.add_argument("--calibration-csv", default=None, help="override path")
     ap.add_argument("--out", default=None, help="output PNG (default <diag-dir>/report.png)")
     ap.add_argument("--rolling", type=int, default=20, help="rolling-window width")
+    ap.add_argument("--config", default=None,
+                    help="JSON file of hyperparameters to display (optional)")
+    ap.add_argument("--checkpoint", default="cone_action_gnn.pt",
+                    help="model .pt to read hyperparameters from if --config absent")
     ap.add_argument("--split", action="store_true",
                     help="also write each panel as its own PNG")
     args = ap.parse_args()
@@ -296,8 +402,16 @@ def main() -> None:
     if n_ep == 0:
         raise SystemExit(f"no episodes found in {ep_path}")
     w = max(1, min(args.rolling, n_ep))
+    cfg = load_config(args.diag_dir, args.config, args.checkpoint)
 
-    fig, axes = plt.subplots(3, 3, figsize=(18, 14))
+    # 4x3 panel grid (10 used; last two left blank for future panels) + config strip
+    fig = plt.figure(figsize=(18, 19))
+    gs = fig.add_gridspec(5, 3, height_ratios=[1, 1, 1, 1, 0.42], hspace=0.5, wspace=0.25)
+    axes = np.empty((4, 3), dtype=object)
+    for r in range(4):
+        for c in range(3):
+            axes[r, c] = fig.add_subplot(gs[r, c])
+
     panel_gap_curve(axes[0, 0], ep, w)
     panel_resolution(axes[0, 1], ep, w)
     panel_win_tie_loss(axes[0, 2], ep, w)
@@ -308,14 +422,23 @@ def main() -> None:
     panel_calibration(axes[2, 1], cal)
     panel_value_error(axes[2, 2], cal, w)
 
+    timeout_penalty = float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0
+    panel_reward(axes[3, 0], ep, w, timeout_penalty=timeout_penalty)  # panel 10
+
+    # blank slots reserved for future panels
+    axes[3, 1].axis("off")
+    axes[3, 2].axis("off")
+
+    cfg_ax = fig.add_subplot(gs[4, :])
+    render_config(cfg_ax, cfg)
+
     res_rate = sum(ep["resolved"]) / n_ep
     win = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g < 0)
     fig.suptitle(
         f"Diagnostics report  |  {n_ep} episodes  |  resolved {res_rate:.0%}  "
         f"|  beats min_sum {win}/{n_res} resolved  |  gap panels drop {dropped} timed-out",
         fontsize=13)
-    fig.tight_layout(rect=(0, 0, 1, 0.97))
-    fig.savefig(out_png, dpi=150)
+    fig.savefig(out_png, dpi=150, bbox_inches="tight")
     print(f"wrote {out_png}")
 
     # separate figure: distribution of the INITIAL cones fed to self-play
@@ -334,6 +457,8 @@ def main() -> None:
             ("gap_hist", lambda a: panel_gap_hist(a, ep)),
             ("calibration", lambda a: panel_calibration(a, cal)),
             ("value_error", lambda a: panel_value_error(a, cal, w)),
+            ("reward", lambda a: panel_reward(
+                a, ep, w, float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0)),
             ("initial_mult", lambda a: panel_mult_hist(a, ep)),
             ("initial_dim", lambda a: panel_dim_hist(a, ep)),
         ]
