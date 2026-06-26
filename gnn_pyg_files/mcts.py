@@ -23,7 +23,6 @@ class MCTSNode:
     W: np.ndarray = field(default_factory = lambda: np.zeros((0,), dtype = np.float64)) 
     Q: np.ndarray = field(default_factory = lambda: np.zeros((0,), dtype = np.float64)) 
     children: Dict[latticeId, "MCTSNode"] = field(default_factory = dict) ## pair (action, MCTS node with resulting graph)
-    potential: Optional[float] = None   # cached estimated value = log_det_sum(state)
 
     ## retrieves N, or 0 if empty. 
     @property
