@@ -90,9 +90,7 @@ def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
 #  TRAINING LOOP
 # ===========================================================================================
 
-## Outputs the states visited over the episode, with attached performance targets. 
-## NOTE: removed enumerator, added option for dirichlet. removed rng and det_max options. Added
-## initial state as a necessary parameter. 
+## Outputs the states visited over the episode, with attached performance targets for the loss.
 def self_play_episode(
     *,
     model: torch.nn.Module, ## evaluation model
@@ -113,24 +111,24 @@ def self_play_episode(
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
 
-    ## Warning: For data visualization - straight from Claude
-    ## =======================================================================================
+    ## for data logging
     root_cone = next(iter(initial_state._cone_objects.values()))
     root_n = len(root_cone.rays[0])
     root_mult = int(root_cone.multiplicity)
     resolved = False
     root_rays = next(iter(initial_state._cone_objects.values())).rays   
     subdivision_points = []
-    ## =======================================================================================
-
 
     state = initial_state
-    terminal_reward, baseline_fan, baseline_actions = min_sum(state)
+    baseline_steps_taken, baseline_fan, baseline_actions = min_sum(state)
+
+    ## run full MCTS from initial state to decomposition. 
     for _ in range(max_steps):
         if state.isDecomposed():
             resolved = True
             break
         
+        ## run one MCTS search from current state (one-step)
         search = MCTS(
             model = model,
             num_simulations = mcts_sims,
@@ -138,70 +136,57 @@ def self_play_episode(
             dirichlet_alpha = dirichlet_alpha,
             dirichlet_eps = dirichlet_eps,
             device = device,
-            terminal_reward = terminal_reward
         )
-        states.append(state.copy())
-        result = search.run(state, temperature = temperature, add_root_noise = True)
+        result = search.run(state, temperature = temperature, add_root_noise = True)        
 
+        ## log history
+        states.append(state.copy())
         policies.append(torch.tensor(result.visit_probs, dtype = torch.float32))
         action_options_history.append(list(result.actions))
 
-        # Training uses MCTS visit policy. The environment action can be sampled
-        # for exploration or greedy for stability.
+        # Training uses MCTS visit policy
         a = result.best_action
-        subdivision_points.append(state._lattice_id_to_coord[a])   # LOGGING
+        subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
     
     examples: List[HeteroData] = []
-    horizon = len(states)
+    agent_steps_taken = len(states) 
+    rewards: List[float] = [] ## info for logging
 
-    # If the rollout stopped because max_steps was reached before terminal, the
-    # previous version I was playing with had incorrectly treated the final sampled states as almost
-    # solved, which made the value/cost head too optimistic and hurt MCTS.
-    # Therefore I added an explicit tail cost to all states from an unfinished rollout.
-    tail_cost = 0.0 if state.isDecomposed() else float(timeout_penalty)
-
-    ## for data visualization
-    ## =======================================================================================
-    targets: List[float] = []
-    baseline_rays = horizon
-
-    # NEW
-    if traj is not None:
-        final_fan = [c.rays for c in state._cone_objects.values()]
-        traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
-                 final_fan=final_fan, resolved=resolved or states[-1].isDecomposed(),
-                 agent_rays=horizon, baseline_rays=terminal_reward,
-                 baseline_points=baseline_actions,                     # heuristic's inserted rays
-                 baseline_fan=[c.rays for c in baseline_fan])          # heuristic's final fan (optional)
-    ## =======================================================================================  
-
+    ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        remaining_cost = float(horizon - t) + tail_cost
+        ## reward function
+        if resolved:
+            reward = float(baseline_steps_taken - agent_steps_taken)
+        else: 
+            reward = float(timeout_penalty)
 
-        ## for data visualization
-        ## ===================================================================================
-        if t == 0:
-            baseline_rays = terminal_reward
-        targets.append(terminal_reward - remaining_cost)
-        ## ===================================================================================
+        rewards.append(reward)
 
         attach_targets(state, 
         target_policy = policies[t], 
         actions = action_options_history[t], 
-        target_value = terminal_reward - remaining_cost) 
+        target_value = reward) 
 
+        ## exclude terminal states from training examples
         if len(state.getValidActions()) > 0:
             examples.append(state)
 
-    ## for data visualization
-    ## =======================================================================================
+    # log cone subdivision trajectory (agent's action choices)
+    if traj is not None:
+        final_fan = [c.rays for c in state._cone_objects.values()]
+        traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
+                 final_fan=final_fan, resolved=resolved, agent_rays=agent_steps_taken, 
+                 baseline_rays=baseline_steps_taken, baseline_points=baseline_actions,                     
+                 baseline_fan=[c.rays for c in baseline_fan])     
+
+    # log cone evaluation metrics
     if diag is not None:
         ## per-episode solution quality (inserted rays vs min_sum baseline)
         diag.log_episode(
             episode = episode_idx, n = root_n, mult = root_mult,
-            agent_rays = horizon, baseline_rays = baseline_rays,
-            resolved = resolved or states[-1].isDecomposed()
+            agent_rays = agent_steps_taken, baseline_rays = baseline_steps_taken,
+            resolved = resolved
         )
         ## value-head calibration: predicted value vs reward target over visited states
         if states:
@@ -216,10 +201,9 @@ def self_play_episode(
                         preds.extend(extract_value(model(batch)).tolist())
                 if was_training:
                     model.train()
-                diag.log_calibration(episode = episode_idx, predicted = preds, target = targets)
+                diag.log_calibration(episode = episode_idx, predicted = preds, target = rewards)
             except Exception as e:
                 diag.warn_calibration_once(e)
-    ## =======================================================================================
 
     return examples
 
@@ -268,8 +252,8 @@ def main() -> None:
     parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--timeout-penalty", type=float, default=0.0)
-    parser.add_argument("--max-steps", type=int, default=20)
+    parser.add_argument("--timeout-penalty", type=float, default=1.0)
+    parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--det-max", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -386,6 +370,11 @@ def main() -> None:
                 )
             if (ep + 1) % max(1, args.episodes // 20) == 0:
                 print(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
+                
+        # ---- periodic checkpoint (NEW) ----  <-- here, inside the loop, outside the batch-size gate
+        if (ep + 1) % 200 == 0:
+            torch.save({"model": model.state_dict(), "args": vars(args), "episode": ep + 1},
+                       args.save)
 
     ## for data visualization
     ## =======================================================================================
