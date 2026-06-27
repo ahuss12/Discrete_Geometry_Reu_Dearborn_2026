@@ -34,6 +34,7 @@ class CGLGraph(HeteroData):
         super().__init__()
 
         self._dimension: int = dimension
+        self._singular_count: int = 0
 
         ## cone bookkeeping
         self._cone_id_to_idx: dict[int, int]  = {}
@@ -248,21 +249,22 @@ class CGLGraph(HeteroData):
             self.addConeGeneratorEdge(coneId, genId)
 
     def wireConeLattice(self, coneId: int, cone: Cone) -> None:
-        points, _ = cone.extraneousSet()
-        for point in points:
+        for point, lam in zip(*cone.extraneousSet):
             if not isPrimitiveNonzero(point):
                 continue
             latticeId   = self.getOrCreateLatticeNode(point)
             self.addConeLatticeEdge(coneId, latticeId)
-            barycentric = cone.barycentricCoords(point)
-            for i in range(len(cone.rays)):
-                if barycentric[i] > 0:
+            for i in range(len(lam)):
+                if lam[i] > 0:
                     genId = self._coord_to_gen_id[cone.rays[i]]
-                    self.addGeneratorLatticeEdge(genId, latticeId, float(barycentric[i]))
+                    self.addGeneratorLatticeEdge(genId, latticeId, float(lam[i]))
 
     ## --- cone node operations ---
 
     def addConeNode(self, cone: Cone) -> int:
+        if cone.isSingular:
+            self._singular_count += 1
+
         coneId = self._next_cone_id
         self._next_cone_id += 1
 
@@ -283,6 +285,12 @@ class CGLGraph(HeteroData):
     def overwriteConeNode(self, coneId: int, cone: Cone) -> None:
         self.removeAllConeGeneratorEdges(coneId)
         self.removeAllConeLatticeEdges(coneId)
+
+        oldCone = self._cone_objects[coneId]
+        if oldCone.isSingular:
+            self._singular_count -= 1
+        if cone.isSingular:
+            self._singular_count += 1
 
         idx = self._cone_id_to_idx[coneId]
         self._cone_objects[coneId] = cone
@@ -356,10 +364,7 @@ class CGLGraph(HeteroData):
     ## --- RL interface ---
 
     def isDecomposed(self) -> bool:
-        for cone in self._cone_objects.values():
-            if cone.isSingular:
-                return False
-        return True
+        return self._singular_count == 0
 
     def getValidActions(self) -> list[int]:
         ei = self['lattice', 'in', 'cone'].edge_index
@@ -393,6 +398,7 @@ class CGLGraph(HeteroData):
     
     def copy(self) -> "CGLGraph":
         new = CGLGraph(dimension = self._dimension)
+        new._singular_count = self._singular_count
 
         ## node features
         new['cone'].x      = self['cone'].x.clone()
@@ -498,7 +504,7 @@ class CGLGraph(HeteroData):
 def main():
     c = Cone.buildCone([[1, 0, 0, 0], [1, 2, 0, 0], [1, 2, 1, 0], [0, 1, 2, 3]])
     print(f"Initial cone: rays={c.rays}  mult={c.multiplicity}")
-    print(f"FPP: {c.extraneousSet()}\n")
+    print(f"FPP: {c.extraneousSet[0]}\n")
 
     g = CGLGraph()
     g.addConeNode(c)

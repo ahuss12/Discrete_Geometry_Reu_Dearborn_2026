@@ -66,7 +66,7 @@ def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
     def extraneous(cone):
         d = extraneous_set_cache.get(cone)
         if d is None:
-            pts, lams = cone.extraneousSet()
+            pts, lams = cone.extraneousSet
             d = {p: lam for p, lam in zip(pts, lams) if isPrimitiveNonzero(p)}
             extraneous_set_cache[cone] = d
         return d
@@ -161,11 +161,15 @@ def self_play_episode(
     for t, state in enumerate(states):
         ## reward function
         if resolved:
-            # agent_to_go = agent_steps_taken - t          # rays the agent used after reaching s_t
-            # reward = float(baseline_to_go[t] - agent_to_go)
+            # reward = float(baseline_to_go[t] - agent_steps_taken + t)
+            # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
             reward = float(baseline_steps_taken - agent_steps_taken)
+            # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
+            # reward = float(-agent_steps_taken + t)
         else: 
             reward = float(-timeout_penalty)
+            # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
+            # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
 
         rewards.append(reward)
 
@@ -343,7 +347,8 @@ def main() -> None:
         g.addConeNode(Cone(generateRandomCone(n,d, rng = rng)))
         training_examples.append(g)
 
-    for ep in trange(args.episodes, desc="self-play"):
+    for ep in trange(args.episodes, desc="self-play", unit="ep",
+                     bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}{postfix}]"):
         examples = self_play_episode(
             model=model,
             max_steps=args.max_steps,

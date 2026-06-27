@@ -23,8 +23,8 @@ lower bound, not a real optimality gap. Every gap/parity panel below therefore
 uses RESOLVED episodes only; timeouts are summarized separately (panels 2 and 6).
 
 Usage:
-  python read_diagnostics.py --diag-dir diagnostics
-  python read_diagnostics.py --diag-dir diagnostics --rolling 25 --split
+  python read_diagnostics.py --directory diagnostics
+  python read_diagnostics.py --directory diagnostics --rolling 25 --split
 """
 from __future__ import annotations
 import argparse
@@ -211,32 +211,30 @@ def panel_resolution_vs_mult(ax, ep: dict, nbins: int = 8) -> None:
     ax.set_xlabel("mult(\u03c3) of root cone"); ax.set_ylabel("fraction resolved")
     ax.set_title("6. Resolution rate vs multiplicity\n(harder cones to the right)")
 
-def panel_resolution_vs_dim(ax, ep: dict, nbins: int = 3) -> None:
+def panel_resolution_vs_dim(ax, ep: dict) -> None:
     dim, res = ep["n"], ep["resolved"]
+    ax.set_title("7. Resolution rate vs dimension")
     if not dim:
-        ax.set_title("7. Resolution rate vs dimension"); return
-    lo, hi = min(dim), max(dim)
-    if lo == hi:
-        edges = [lo, lo + 1]
-    else: 
-        edges = np.linspace(lo, hi + 1, min(nbins, hi - lo + 1) + 1)
-    centers, rates, counts = [], [], []
-    for i in range(len(edges) - 1):
-        sel = [r for d, r in zip(dim, res) if edges[i] <= d < edges[i + 1]]
-        if sel:
-            centers.append((edges[i] + edges[i + 1]) / 2)
-            rates.append(sum(sel) / len(sel))
-            counts.append(len(sel))
-    if not centers:
-        ax.set_title("7. Resolution rate vs dimension"); return
-    width = (edges[1] - edges[0]) * 0.85
-    bars = ax.bar(centers, rates, width=width, color="C2", alpha=0.8)
-    for b, c in zip(bars, counts):  # annotate episode count per bucket
+        return
+
+    # group episodes by exact integer dimension
+    by_dim: dict[int, list] = {}
+    for d, r in zip(dim, res):
+        by_dim.setdefault(int(d), []).append(r)
+
+    dims   = sorted(by_dim)                                    # every dim that occurs
+    rates  = [sum(by_dim[d]) / len(by_dim[d]) for d in dims]
+    counts = [len(by_dim[d]) for d in dims]
+
+    bars = ax.bar(dims, rates, width=0.85, color="C2", alpha=0.8)
+    for b, c in zip(bars, counts):                            # annotate episode count
         ax.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.02, str(c),
                 ha="center", va="bottom", fontsize=7)
+
+    ax.set_xticks(dims)                                       # integer ticks only
     ax.set_ylim(0, 1.08)
-    ax.set_xlabel("dim(\u03c3) of root cone"); ax.set_ylabel("fraction resolved")
-    ax.set_title("7. Resolution rate vs multiplicity\n(harder cones to the right)")
+    ax.set_xlabel("dim(\u03c3) of root cone")
+    ax.set_ylabel("fraction resolved")
 
 
 def panel_gap_hist(ax, ep: dict) -> None:
@@ -361,7 +359,7 @@ def panel_dim_hist(ax, ep: dict) -> None:
     ax.set_xlabel("dimension n of initial cone"); ax.set_ylabel("episodes")
     ax.set_title(f"Initial-cone dimension\n({len(n)} cones, n \u2208 [{lo}, {hi}])")
 
-def load_config(diag_dir: str, config_path: Optional[str],
+def load_config(directory: str, config_path: Optional[str],
                 checkpoint_path: Optional[str]) -> Optional[dict]:
     """Find the run's hyperparameters. Priority:
       1. explicit --config JSON
@@ -376,7 +374,7 @@ def load_config(diag_dir: str, config_path: Optional[str],
         except Exception as e:
             print(f"[config] could not read {config_path}: {e}")
 
-    j = os.path.join(diag_dir, "config.json")
+    j = os.path.join(directory, "config.json")
     if os.path.exists(j):
         try:
             with open(j) as f:
@@ -446,7 +444,7 @@ def write_initial_cones(ep: dict, out_png: str) -> str:
 # --------------------------------------------------------------------------- main
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--diag-dir", default="diagnostics",
+    ap.add_argument("--directory", default="diagnostics",
                     help="directory holding the two CSVs")
     ap.add_argument("--episode-csv", default=None, help="override path")
     ap.add_argument("--calibration-csv", default=None, help="override path")
@@ -460,18 +458,18 @@ def main() -> None:
                     help="also write each panel as its own PNG")
     args = ap.parse_args()
 
-    ep_path = args.episode_csv or os.path.join(args.diag_dir, "episode_quality.csv")
-    cal_path = args.calibration_csv or os.path.join(args.diag_dir, "value_calibration.csv")
-    out_png = args.out or os.path.join(args.diag_dir, "report.png")
+    ep_path = args.episode_csv or os.path.join(args.directory, "episode_quality.csv")
+    cal_path = args.calibration_csv or os.path.join(args.directory, "value_calibration.csv")
+    out_png = args.out or os.path.join(args.directory, "report.png")
 
     ep = load_episode_csv(ep_path)
     cal = load_calibration_csv(cal_path)
-    tl = load_loss_csv(os.path.join(args.diag_dir, "train_loss.csv"))
+    tl = load_loss_csv(os.path.join(args.directory, "train_loss.csv"))
     n_ep = len(ep["episode"])
     if n_ep == 0:
         raise SystemExit(f"no episodes found in {ep_path}")
     w = max(1, min(args.rolling, n_ep))
-    cfg = load_config(args.diag_dir, args.config, args.checkpoint)
+    cfg = load_config(args.directory, args.config, args.checkpoint)
 
     # 4x3 panel grid (11 used; last slot left blank for a future panel) + config strip
     fig = plt.figure(figsize=(18, 19))
@@ -510,7 +508,7 @@ def main() -> None:
     print(f"wrote {out_png}")
 
     # separate figure: distribution of the INITIAL cones fed to self-play
-    init_png = os.path.join(args.diag_dir, "initial_cones.png")
+    init_png = os.path.join(args.directory, "initial_cones.png")
     write_initial_cones(ep, init_png)
     print(f"wrote {init_png}")
 
@@ -536,7 +534,7 @@ def main() -> None:
             f1, a1 = plt.subplots(figsize=(6, 5))
             fn(a1)
             f1.tight_layout()
-            p = os.path.join(args.diag_dir, f"panel_{name}.png")
+            p = os.path.join(args.directory, f"panel_{name}.png")
             f1.savefig(p, dpi=150); plt.close(f1)
             print(f"wrote {p}")
 

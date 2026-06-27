@@ -93,6 +93,7 @@ class MCTS:
 
     ## Runs the MCTS for num_simulations trials and outputs a SearchResult object (which can itself be called to give the final action choice)
     def run(self, root_state: CGLGraph, *, temperature: float = 1.0, add_root_noise: bool = False) -> SearchResult:
+        self.model.eval()
         root = MCTSNode(state = root_state)
         root_value = self._expand(root)
         if root.P.size == 0:
@@ -157,7 +158,7 @@ class MCTS:
             return [], np.zeros(0, dtype = np.float64,), 0.0
 
         ## data = state.to(self.device)
-        self.model.eval()
+        ## self.model.eval()
 
         out = self.model(state)
         log_p = out["log_p"] ## retrieve log-probabilities of available actions
