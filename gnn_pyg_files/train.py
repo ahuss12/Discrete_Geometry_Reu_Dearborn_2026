@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch_geometric.data import HeteroData
 from torch_geometric.loader import DataLoader
-from tqdm import trange
+from tqdm import tqdm, trange
 
 from utils import generateRandomCone, validActionMask, isPrimitiveNonzero
 from Cone import Cone, fanSubdivide
@@ -110,6 +110,7 @@ def self_play_episode(
     states = []
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
+    # baseline_to_go = []         ## min_sum rays-to-finish from each visited state
 
     ## for data logging
     root_cone = next(iter(initial_state._cone_objects.values()))
@@ -144,6 +145,9 @@ def self_play_episode(
         policies.append(torch.tensor(result.visit_probs, dtype = torch.float32))
         action_options_history.append(list(result.actions))
 
+        # baseline_from_here, _, _ = min_sum(state)
+        # baseline_to_go.append(baseline_from_here)
+
         # Training uses MCTS visit policy
         a = result.best_action
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
@@ -157,6 +161,8 @@ def self_play_episode(
     for t, state in enumerate(states):
         ## reward function
         if resolved:
+            # agent_to_go = agent_steps_taken - t          # rays the agent used after reaching s_t
+            # reward = float(baseline_to_go[t] - agent_to_go)
             reward = float(baseline_steps_taken - agent_steps_taken)
         else: 
             reward = float(-timeout_penalty)
@@ -374,7 +380,7 @@ def main() -> None:
                 policy_loss=metrics["policy_loss"],
                 value_loss=metrics["value_loss"])
             if (ep + 1) % max(1, args.episodes // 20) == 0:
-                print(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
+                tqdm.write(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
                 
         # ---- periodic checkpoint (NEW) ----  <-- here, inside the loop, outside the batch-size gate
         if (ep + 1) % 200 == 0:

@@ -74,6 +74,7 @@ def alphazero_cost_loss(out: dict, data, *, value_weight: float) -> dict:
     policy_loss = torch.zeros(B, device=log_p.device).scatter_add_(0, action_batch, ce_per_action).mean()
 
     value_loss = F.mse_loss(value, data.y_value.view(-1))
+    # value_loss = F.huber_loss(value, data.y_value.view(-1), delta=5.0)
 
     loss = policy_loss + value_weight * value_loss
     return {"loss": loss, "policy_loss": policy_loss, "value_loss": value_loss}

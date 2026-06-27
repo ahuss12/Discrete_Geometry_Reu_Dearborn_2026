@@ -1,0 +1,40 @@
+config:
+  batch_size      = 8
+  c_puct          = 1.5
+  det_max         = 20
+  device          = cpu
+  diag_dir        = diagnostics
+  dirichlet_alpha = None
+  dirichlet_eps   = 0.25
+  dropout         = 0.05
+  embedding_size  = 7
+  episodes        = 100
+  epochs_per_iter = 1
+  hidden_dim      = 128
+  lr              = 0.0003
+  max_dimension   = 2
+  max_steps       = 40
+  mcts_sims       = 16
+  num_blocks      = 4
+  replay_capacity = 50000
+  resume          = 
+  save            = cone_action_gnn.pt
+  seed            = 0
+  temperature     = 1.0
+  timeout_penalty = 1.0
+  value_weight    = 0.25
+self-play:   0%|          | 0/100 [00:00<?, ?it/s]self-play:   0%|          | 0/100 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/train.py", line 405, in <module>
+    main()
+    ~~~~^^
+  File "/Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/train.py", line 347, in main
+    examples = self_play_episode(
+        model=model,
+    ...<11 lines>...
+        episode_idx=ep
+    )
+  File "/Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/train.py", line 149, in self_play_episode
+    baseline_to_go.append(baseline_from_here)
+    ^^^^^^^^^^^^^^
+NameError: name 'baseline_to_go' is not defined

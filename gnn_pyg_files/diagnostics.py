@@ -30,14 +30,20 @@ def extract_value(out) -> torch.Tensor:
 class Diagnostics:
     """Minimal CSV + plot logger for self-play diagnostics.
 
-    Writes two CSVs (episode_quality.csv, value_calibration.csv) incrementally,
-    and on finish() emits optimality_gap.png and value_calibration.png.
-    All counts are in inserted rays (= stellar subdivisions applied).
+    Writes three CSVs (episode_quality.csv, value_calibration.csv,
+    train_loss.csv) incrementally, and on finish() emits optimality_gap.png and
+    value_calibration.png. All ray counts are in inserted rays (= stellar
+    subdivisions applied).
 
     NOTE on censoring: a timed-out episode reports agent_rays = max_steps, so its
     gap is a lower bound, not a true optimality gap. The optimality-gap plot here
     uses resolved episodes only and marks timeouts separately. For the full
     multi-panel report use read_diagnostics.py on the CSVs.
+
+    NOTE on train_loss.csv: rows are written only on episodes where a training
+    step actually ran (replay >= batch_size), so its `episode` column is sparse
+    and non-contiguous. Each row is the mean over the epochs_per_iter passes on
+    the sampled batch -- a fit-to-replay number, not held-out generalization.
     """
 
     def __init__(self, outdir: str = "diagnostics", rolling: int = 20):
@@ -48,6 +54,7 @@ class Diagnostics:
 
         self.episode_path = os.path.join(outdir, "episode_quality.csv")
         self.calib_path   = os.path.join(outdir, "value_calibration.csv")
+        self.loss_path    = os.path.join(outdir, "train_loss.csv")
 
         self._ep_f = open(self.episode_path, "w", newline="")
         self._ep_w = csv.writer(self._ep_f)
@@ -59,13 +66,21 @@ class Diagnostics:
         self._cal_w = csv.writer(self._cal_f)
         self._cal_w.writerow(["episode", "state_idx", "predicted_value", "target_value"])
 
+        self._loss_f = open(self.loss_path, "w", newline="")
+        self._loss_w = csv.writer(self._loss_f)
+        self._loss_w.writerow(["episode", "loss", "policy_loss", "value_loss"])
+
         # in-memory buffers for plotting
         self._episodes: list[int]   = []
         self._gaps: list[float]     = []
-        self._resolved: list[bool]  = []          # NEW: lets plots drop censored timeouts
+        self._resolved: list[bool]  = []          # lets plots drop censored timeouts
         self._cal_pred: list[float] = []
         self._cal_tgt: list[float]  = []
-        self._cal_ep: list[int]     = []          # NEW: episode per calibration point
+        self._cal_ep: list[int]     = []          # episode per calibration point
+        self._loss_ep: list[int]    = []          # episode per train-step row
+        self._loss_total: list[float]  = []
+        self._loss_policy: list[float] = []
+        self._loss_value: list[float]  = []
 
     # ----- per-episode solution quality -----
     def log_episode(self, *, episode: int, n: int, mult: int,
@@ -86,6 +101,16 @@ class Diagnostics:
             self._cal_tgt.append(float(t))
             self._cal_ep.append(int(episode))
         self._cal_f.flush()
+
+    # ----- per-train-step loss -----
+    def log_train(self, *, episode: int,
+                  loss: float, policy_loss: float, value_loss: float) -> None:
+        self._loss_w.writerow([episode, float(loss), float(policy_loss), float(value_loss)])
+        self._loss_f.flush()
+        self._loss_ep.append(int(episode))
+        self._loss_total.append(float(loss))
+        self._loss_policy.append(float(policy_loss))
+        self._loss_value.append(float(value_loss))
 
     def warn_calibration_once(self, err: Exception) -> None:
         if not self._calib_warned:
@@ -170,6 +195,7 @@ class Diagnostics:
     def close(self) -> None:
         self._ep_f.close()
         self._cal_f.close()
+        self._loss_f.close()
 
     def finish(self) -> dict:
         paths = {
@@ -177,6 +203,7 @@ class Diagnostics:
             "value_calibration": self.plot_calibration(),
             "episode_csv": self.episode_path,
             "calibration_csv": self.calib_path,
+            "train_loss_csv": self.loss_path,
         }
         self.close()
         return paths
