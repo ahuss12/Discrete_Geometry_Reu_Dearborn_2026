@@ -1,6 +1,8 @@
 from __future__ import annotations
 import argparse
+import json
 import random
+from datetime import datetime
 from typing import List, Optional
 from diagnostics import Diagnostics, extract_value
 from trajectory_log import TrajectoryLogger
@@ -86,6 +88,27 @@ def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
         actions.append(subdivision_point)
     return step_count, cones, actions
 
+## reward function module so we can easily switch our reward function
+def reward_function(
+    resolved: bool, 
+    t: int, 
+    state: CGLGraph, 
+    agent_steps_taken: int, 
+    baseline_steps_taken: int, 
+    timeout_penalty: float,
+    baseline_to_go: Optional[list[int,...]] = None, 
+    ) -> float:
+    if resolved:
+            # reward = float(baseline_to_go[t] - agent_steps_taken + t)
+            # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
+            reward = float(baseline_steps_taken - agent_steps_taken)
+            # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
+            # reward = float(-agent_steps_taken + t)
+    else:
+            reward = float(-timeout_penalty)
+            # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
+            # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
+    return reward
 # ===========================================================================================
 #  TRAINING LOOP
 # ===========================================================================================
@@ -123,22 +146,22 @@ def self_play_episode(
     state = initial_state
     baseline_steps_taken, baseline_fan, baseline_actions = min_sum(state)
 
+    search = MCTS(
+            model = model,
+            num_simulations = mcts_sims,
+            c_puct = c_puct,
+            dirichlet_alpha = dirichlet_alpha,
+            dirichlet_eps = dirichlet_eps,
+            device = device)
+    reuse_node = None
+
     ## run full MCTS from initial state to decomposition. 
     for _ in range(max_steps):
         if state.isDecomposed():
             resolved = True
             break
         
-        ## run one MCTS search from current state (one-step)
-        search = MCTS(
-            model = model,
-            num_simulations = mcts_sims,
-            c_puct = c_puct,
-            dirichlet_alpha = dirichlet_alpha,
-            dirichlet_eps = dirichlet_eps,
-            device = device,
-        )
-        result = search.run(state, temperature = temperature, add_root_noise = True)        
+        result = search.run(state, temperature = temperature, add_root_noise = True, reuse_node = reuse_node)        
 
         ## log history
         states.append(state.copy())
@@ -150,27 +173,19 @@ def self_play_episode(
 
         # Training uses MCTS visit policy
         a = result.best_action
+        action_idx = result.actions.index(a)
+        reuse_node = result.root.children.get(action_idx)
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
     
     examples: List[HeteroData] = []
-    agent_steps_taken = len(states) 
+    agent_steps_taken = len(states)
     rewards: List[float] = [] ## info for logging
+    final_state = state  # save before loop rebinds 'state'
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        ## reward function
-        if resolved:
-            # reward = float(baseline_to_go[t] - agent_steps_taken + t)
-            # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
-            reward = float(baseline_steps_taken - agent_steps_taken)
-            # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
-            # reward = float(-agent_steps_taken + t)
-        else: 
-            reward = float(-timeout_penalty)
-            # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
-            # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
-
+        reward = reward_function(resolved, t, state, agent_steps_taken, baseline_steps_taken, timeout_penalty)
         rewards.append(reward)
 
         attach_targets(state, 
@@ -184,7 +199,7 @@ def self_play_episode(
 
     # log cone subdivision trajectory (agent's action choices)
     if traj is not None:
-        final_fan = [c.rays for c in state._cone_objects.values()]
+        final_fan = [c.rays for c in final_state._cone_objects.values()]
         traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
                  final_fan=final_fan, resolved=resolved, agent_rays=agent_steps_taken, 
                  baseline_rays=baseline_steps_taken, baseline_points=baseline_actions,                     
@@ -264,6 +279,7 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
     parser.add_argument("--max-steps", type=int, default=40)
+    parser.add_argument("--det-min", type=int, default=2)
     parser.add_argument("--det-max", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -279,8 +295,9 @@ def main() -> None:
     parser.add_argument("--dirichlet-alpha", type=float, default=None)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
     parser.add_argument("--embedding-size", type=int, default=7)
+    parser.add_argument("--min-dimension", type=int, default=2)
     parser.add_argument("--max-dimension", type=int, default=7)
-    parser.add_argument("--diag-dir", type=str, default="diagnostics")
+    parser.add_argument("--diag-dir", type=str, default="results")
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -328,8 +345,12 @@ def main() -> None:
 
     ## for data visualization
     ## =======================================================================================
-    diag = Diagnostics(outdir=args.diag_dir)
-    traj = TrajectoryLogger(os.path.join(args.diag_dir, "trajectories.jsonl"))
+    run_dir = os.path.join(args.diag_dir, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "config.json"), "w") as _f:
+        json.dump(vars(args), _f, indent=2)
+    diag = Diagnostics(outdir=run_dir)
+    traj = TrajectoryLogger(os.path.join(run_dir, "trajectories.jsonl"))
     ## =======================================================================================
 
     args_dict = vars(args)
@@ -341,8 +362,8 @@ def main() -> None:
     ## generate semirandom training examples
     training_examples = []
     for i in range(args.episodes):
-        n = rng.randint(2, args.max_dimension)
-        d = rng.randint(2, args.det_max)
+        n = rng.randint(args.min_dimension, args.max_dimension)
+        d = rng.randint(args.det_min, args.det_max)
         g = CGLGraph(dimension = args.max_dimension)
         g.addConeNode(Cone(generateRandomCone(n,d, rng = rng)))
         training_examples.append(g)
@@ -400,7 +421,7 @@ def main() -> None:
     traj.close()
     paths = diag.finish()
     paths["trajectories"] = traj.path          # fold the JSONL into the same summary
-    print(f"diagnostics written to {args.diag_dir}/:")
+    print(f"diagnostics written to {run_dir}/:")
     for k, v in paths.items():
         if v is not None:
             print(f"  {k:<18} = {v}")

@@ -148,6 +148,29 @@ def panel_win_tie_loss(ax, ep: dict, w: int) -> None:
     ax.legend(fontsize=8, loc="lower left")
 
 
+def panel_win_tie_loss_highdim(ax, ep: dict, w: int, min_dim: int = 3) -> None:
+    # Same as panel 3 but restricted to dim >= min_dim (2D ties are unavoidable).
+    res = _resolved_mask(ep)
+    mask = [r and n >= min_dim for r, n in zip(res, ep["n"])]
+    xr = [e for e, m in zip(ep["episode"], mask) if m]
+    gr = [g for g, m in zip(ep["gap"], mask) if m]
+    if not xr:
+        ax.text(0.5, 0.5, f"no resolved dim≥{min_dim} episodes",
+                ha="center", va="center")
+        ax.set_title(f"13. Win / tie / loss (dim≥{min_dim})"); return
+    win  = rolling_mean([1.0 if g < 0 else 0.0 for g in gr], w)
+    tie  = rolling_mean([1.0 if g == 0 else 0.0 for g in gr], w)
+    loss = rolling_mean([1.0 if g > 0 else 0.0 for g in gr], w)
+    ax.stackplot(xr, win, tie, loss,
+                 labels=["beats min_sum", "ties", "worse"],
+                 colors=["C2", "C7", "C3"], alpha=0.85)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("episode"); ax.set_ylabel("fraction (rolling)")
+    ax.set_title(f"13. Win / tie / loss (dim≥{min_dim} only)\n"
+                 f"(2D excluded — beating min_sum is impossible there)")
+    ax.legend(fontsize=8, loc="lower left")
+
+
 def panel_parity(ax, ep: dict) -> None:
     # Each resolved episode: (min_sum rays, agent rays). Below y=x line = agent beat it.
     res = _resolved_mask(ep)
@@ -442,10 +465,20 @@ def write_initial_cones(ep: dict, out_png: str) -> str:
 
 
 # --------------------------------------------------------------------------- main
+def _latest_run_dir(base: str = "results") -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    base_abs = base if os.path.isabs(base) else os.path.join(script_dir, base)
+    if os.path.isdir(base_abs):
+        runs = sorted(d for d in os.listdir(base_abs) if os.path.isdir(os.path.join(base_abs, d)))
+        if runs:
+            return os.path.join(base_abs, runs[-1])
+    return base_abs
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--directory", default="diagnostics",
-                    help="directory holding the two CSVs")
+    ap.add_argument("--directory", default=None,
+                    help="run directory holding the CSVs (default: latest in diagnostics/results/)")
     ap.add_argument("--episode-csv", default=None, help="override path")
     ap.add_argument("--calibration-csv", default=None, help="override path")
     ap.add_argument("--out", default=None, help="output PNG (default <diag-dir>/report.png)")
@@ -457,6 +490,8 @@ def main() -> None:
     ap.add_argument("--split", action="store_true",
                     help="also write each panel as its own PNG")
     args = ap.parse_args()
+    if args.directory is None:
+        args.directory = _latest_run_dir()
 
     ep_path = args.episode_csv or os.path.join(args.directory, "episode_quality.csv")
     cal_path = args.calibration_csv or os.path.join(args.directory, "value_calibration.csv")
@@ -471,9 +506,9 @@ def main() -> None:
     w = max(1, min(args.rolling, n_ep))
     cfg = load_config(args.directory, args.config, args.checkpoint)
 
-    # 4x3 panel grid (11 used; last slot left blank for a future panel) + config strip
-    fig = plt.figure(figsize=(18, 19))
-    gs = fig.add_gridspec(5, 3, height_ratios=[1, 1, 1, 1, 0.42], hspace=0.5, wspace=0.25)
+    # 4x3 panel grid + 1 wide extra row + config strip
+    fig = plt.figure(figsize=(18, 22))
+    gs = fig.add_gridspec(6, 3, height_ratios=[1, 1, 1, 1, 0.7, 0.42], hspace=0.5, wspace=0.25)
     axes = np.empty((4, 3), dtype=object)
     for r in range(4):
         for c in range(3):
@@ -495,15 +530,21 @@ def main() -> None:
 
     panel_train_loss(axes[3, 2], tl, w)  # panel 11
 
-    cfg_ax = fig.add_subplot(gs[4, :])
+    ax_highdim = fig.add_subplot(gs[4, :])
+    panel_win_tie_loss_highdim(ax_highdim, ep, w)  # panel 13
+
+    cfg_ax = fig.add_subplot(gs[5, :])
     render_config(cfg_ax, cfg)
 
     res_rate = sum(ep["resolved"]) / n_ep
-    win = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g < 0)
+    win  = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g < 0)
+    ties = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g == 0)
     fig.suptitle(
         f"Diagnostics report  |  {n_ep} episodes  |  resolved {res_rate:.0%}  "
-        f"|  beats min_sum {win}/{n_res} resolved  |  gap panels drop {dropped} timed-out",
-        fontsize=13)
+        f"|  beats min_sum {win}/{n_res} resolved ({win/n_res:.0%})"
+        f"|  ties min_sum {ties}/{n_res} resolved ({ties/n_res:.0%})  "
+        f"|  gap panels drop {dropped} timed-out",
+        fontsize=10)
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     print(f"wrote {out_png}")
 
