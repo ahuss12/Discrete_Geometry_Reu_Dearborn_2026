@@ -89,6 +89,30 @@ def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
         actions.append(subdivision_point)
     return step_count, cones, actions
 
+def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -> tuple[int, bool]:
+    cones = list(graph._cone_objects.values())
+    step_count = 0
+
+    while any(cone.isSingular for cone in cones):
+        if step_count >= max_steps:
+            return step_count, False
+
+        candidates = set()
+        for cone in cones:
+            pts, lams = cone.extraneousSet
+            for point in pts:
+                if isPrimitiveNonzero(point):
+                    candidates.add(point)
+
+        if not candidates:
+            return step_count, False
+
+        point = rng.choice(list(candidates))
+        cones = fanSubdivide(cones, point)
+        step_count += 1
+
+    return step_count, True
+
 ## reward function module so we can easily switch our reward function
 def reward_function(
     resolved: bool, 
@@ -114,6 +138,7 @@ def reward_function(
             # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
             reward = -timeout_penalty
     return reward
+
 # ===========================================================================================
 #  TRAINING LOOP
 # ===========================================================================================
@@ -126,6 +151,7 @@ def self_play_episode(
     mcts_sims: int,
     initial_state: CGLGraph, 
     device: torch.device,
+    rng: random.Random,
     temperature: float = 1.0,
     c_puct: float = 1.5,
     timeout_penalty: float = 0.0, 
@@ -151,15 +177,7 @@ def self_play_episode(
 
     state = initial_state
     baseline_steps_taken, baseline_fan, baseline_actions = min_sum(state)
-
-    search = MCTS(
-            model = model,
-            num_simulations = mcts_sims,
-            c_puct = c_puct,
-            dirichlet_alpha = dirichlet_alpha,
-            dirichlet_eps = dirichlet_eps,
-            device = device)
-    reuse_node = None
+    random_steps, random_resolved = random_baseline(initial_state, rng, max_steps=max_steps * 3)
 
     ## run full MCTS from initial state to decomposition. 
     for i in range(max_steps):
@@ -182,15 +200,12 @@ def self_play_episode(
 
         # Training uses MCTS visit policy
         a = result.best_action
-        action_idx = result.actions.index(a)
-        reuse_node = result.root.children.get(action_idx)
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
     
     examples: List[HeteroData] = []
-    agent_steps_taken = len(states)
+    agent_steps_taken = len(states) 
     rewards: List[float] = [] ## info for logging
-    final_state = state  # save before loop rebinds 'state'
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
@@ -208,7 +223,7 @@ def self_play_episode(
 
     # log cone subdivision trajectory (agent's action choices)
     if traj is not None:
-        final_fan = [c.rays for c in final_state._cone_objects.values()]
+        final_fan = [c.rays for c in state._cone_objects.values()]
         traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
                  final_fan=final_fan, resolved=resolved, agent_rays=agent_steps_taken, 
                  baseline_rays=baseline_steps_taken, baseline_points=baseline_actions,                     
@@ -218,9 +233,11 @@ def self_play_episode(
     if diag is not None:
         ## per-episode solution quality (inserted rays vs min_sum baseline)
         diag.log_episode(
-            episode = episode_idx, n = root_n, mult = root_mult,
-            agent_rays = agent_steps_taken, baseline_rays = baseline_steps_taken,
-            resolved = resolved
+            episode=episode_idx, n=root_n, mult=root_mult,
+            agent_rays=agent_steps_taken,
+            baseline_rays=baseline_steps_taken,
+            random_rays=random_steps, random_resolved=random_resolved,
+            resolved=resolved or states[-1].isDecomposed()
         )
         ## value-head calibration: predicted value vs reward target over visited states
         if states:
@@ -283,16 +300,16 @@ def build_parser() -> argparse.ArgumentParser:
     """All train.py CLI args.  Exposed so sweep.py can discover the full set of
     tunable hyperparameters (names, types, defaults) without drifting out of sync."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--episodes", type=int, default=1000)
     parser.add_argument("--epochs-per-iter", type=int, default=1)
-    parser.add_argument("--mcts-sims", type=int, default=16)
+    parser.add_argument("--mcts-sims", type=int, default=128)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--timeout-penalty", type=float, default=0.2) ## positive penalty -> negative reward
     parser.add_argument("--timeout-multiplier", type=float, default=2.0) ## how many times the baseline are tolerated before the computation times out
     parser.add_argument("--max-steps", type=int, default=40)
-    parser.add_argument("--det-min", type=int, default=2)
-    parser.add_argument("--det-max", type=int, default=20)
+    parser.add_argument("--det-min", type=int, default=12)
+    parser.add_argument("--det-max", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--hidden-dim", type=int, default=128)
@@ -307,8 +324,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
     parser.add_argument("--embedding-size", type=int, default=7)
-    parser.add_argument("--min-dimension", type=int, default=2)
-    parser.add_argument("--max-dimension", type=int, default=4)
+    parser.add_argument("--min-dimension", type=int, default=3)
+    parser.add_argument("--max-dimension", type=int, default=3)
     parser.add_argument("--diag-dir", type=str, default="results")
 
     # old experiment controls.
@@ -392,6 +409,7 @@ def main() -> None:
             mcts_sims=args.mcts_sims,
             initial_state=training_examples[ep],
             device=device,
+            rng=rng,
             temperature=args.temperature,
             c_puct=args.c_puct,
             timeout_penalty=args.timeout_penalty,
