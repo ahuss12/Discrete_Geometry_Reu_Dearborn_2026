@@ -113,6 +113,28 @@ def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -
 
     return step_count, True
 
+## reward function module so we can easily switch our reward function
+def reward_function(
+    resolved: bool, 
+    t: int, 
+    state: CGLGraph, 
+    agent_steps_taken: int, 
+    baseline_steps_taken: int, 
+    timeout_penalty: float,
+    baseline_to_go: Optional[list[int,...]] = None, 
+    ) -> float:
+    if resolved:
+            # reward = float(baseline_to_go[t] - agent_steps_taken + t)
+            # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
+            reward = float(baseline_steps_taken - agent_steps_taken)
+            # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
+            # reward = float(-agent_steps_taken + t)
+    else:
+            reward = float(-timeout_penalty)
+            # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
+            # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
+    return reward
+
 # ===========================================================================================
 #  TRAINING LOOP
 # ===========================================================================================
