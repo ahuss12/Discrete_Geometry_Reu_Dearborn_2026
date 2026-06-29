@@ -1,0 +1,93 @@
+sweep: 28 configs x 3 seeds = 84 runs | budget 10.0h | done 0
+regime/held: {'episodes': 300, 'max_steps': 100, 'min_dimension': 2, 'max_dimension': 3, 'det_min': 2, 'det_max': 35, 'device': 'cpu', 'mcts_sims': 48, 'hidden_dim': 128, 'num_blocks': 4, 'dropout': 0.05, 'embedding_size': 7, 'batch_size': 8, 'epochs_per_iter': 1, 'temperature': 1.0, 'timeout_penalty': 1.0, 'dirichlet_alpha': 0.3, 'dirichlet_eps': 0.25}
+writing -> /Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/results/sweep/summary.csv
+
+[1] trial 0 (lr) seed 0: lr=3e-05 c_puct=1.5 value_weight=0.25
+     -> score=12.49 res=0.96 tie=0.4062  [1715.7s]
+[2] trial 1 (lr) seed 0: lr=0.0001 c_puct=1.5 value_weight=0.25
+     -> score=12.63 res=0.96 tie=0.4792  [1893.9s]
+[3] trial 2 (lr) seed 0: lr=0.0002 c_puct=1.5 value_weight=0.25
+     -> score=7.35 res=0.98 tie=0.5714  [1316.5s]
+[4] trial 3 (baseline) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.25
+     -> score=7.27 res=0.98 tie=0.5306  [1703.7s]
+[5] trial 4 (lr) seed 0: lr=0.0005 c_puct=1.5 value_weight=0.25
+     -> score=8.97 res=0.97 tie=0.5567  [1416.8s]
+[6] trial 5 (lr) seed 0: lr=0.0007 c_puct=1.5 value_weight=0.25
+     -> score=8.26 res=0.98 tie=0.6122  [1226.6s]
+[7] trial 6 (lr) seed 0: lr=0.001 c_puct=1.5 value_weight=0.25
+     -> score=8.46 res=0.99 tie=0.4949  [1453.9s]
+[8] trial 7 (lr) seed 0: lr=0.0015 c_puct=1.5 value_weight=0.25
+     -> score=10.62 res=1.0 tie=0.51  [1764.8s]
+[9] trial 8 (lr) seed 0: lr=0.002 c_puct=1.5 value_weight=0.25
+     -> score=7.47 res=1.0 tie=0.5  [1268.5s]
+[10] trial 9 (lr) seed 0: lr=0.003 c_puct=1.5 value_weight=0.25
+     -> score=8.72 res=0.96 tie=0.5521  [1370.7s]
+[11] trial 10 (c_puct) seed 0: lr=0.0003 c_puct=0.5 value_weight=0.25
+     -> score=5.47 res=1.0 tie=0.57  [1430.0s]
+[12] trial 11 (c_puct) seed 0: lr=0.0003 c_puct=0.75 value_weight=0.25
+     -> score=9.31 res=0.97 tie=0.5773  [1708.4s]
+[13] trial 12 (c_puct) seed 0: lr=0.0003 c_puct=1 value_weight=0.25
+     -> score=8.77 res=0.98 tie=0.6531  [1672.8s]
+[14] trial 13 (c_puct) seed 0: lr=0.0003 c_puct=1.25 value_weight=0.25
+     -> score=11.59 res=0.97 tie=0.5464  [1829.5s]
+[15] trial 14 (c_puct) seed 0: lr=0.0003 c_puct=2 value_weight=0.25
+     -> score=11.85 res=0.96 tie=0.5938  [1665.3s]
+[16] trial 15 (c_puct) seed 0: lr=0.0003 c_puct=2.5 value_weight=0.25
+     -> score=8.03 res=0.98 tie=0.6327  [1314.4s]
+[17] trial 16 (c_puct) seed 0: lr=0.0003 c_puct=3 value_weight=0.25
+     -> score=8.13 res=0.98 tie=0.5102  [1547.8s]
+[18] trial 17 (c_puct) seed 0: lr=0.0003 c_puct=4 value_weight=0.25
+     -> score=10.85 res=0.95 tie=0.5895  [1618.0s]
+[19] trial 18 (c_puct) seed 0: lr=0.0003 c_puct=5 value_weight=0.25
+     -> score=7.72 res=0.99 tie=0.5556  [1496.1s]
+[20] trial 19 (value_weight) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.05
+     -> score=7.64 res=0.98 tie=0.6122  [1729.3s]
+[21] trial 20 (value_weight) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.1
+     -> score=8.9 res=0.98 tie=0.5816  [1497.5s]
+[22] trial 21 (value_weight) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.15
+     -> score=8.79 res=0.98 tie=0.5816  [1388.7s]
+[23] trial 22 (value_weight) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.5
+     -> score=6.99 res=0.98 tie=0.5918  [1393.7s]
+[24] trial 23 (value_weight) seed 0: lr=0.0003 c_puct=1.5 value_weight=0.75
+     -> score=5.26 res=0.99 tie=0.6667  [1393.2s]
+
+[budget] 10.0h reached -- stopping. Re-run to resume.
+
+=== coordinate sweep (24 runs, 24 configs) -- lower score is better, mean over seeds ===
+
+  lr  (others at baseline: c_puct=1.5, value_weight=0.25)
+         value      score(mean±std) seeds  res_rate  tie_rate
+         3e-05         12.490±0.000     1     0.960     0.406
+        0.0001         12.630±0.000     1     0.960     0.479
+        0.0002          7.350±0.000     1     0.980     0.571
+        0.0003          7.270±0.000     1     0.980     0.531  <- best
+        0.0005          8.970±0.000     1     0.970     0.557
+        0.0007          8.260±0.000     1     0.980     0.612
+         0.001          8.460±0.000     1     0.990     0.495
+        0.0015         10.620±0.000     1     1.000     0.510
+         0.002          7.470±0.000     1     1.000     0.500
+         0.003          8.720±0.000     1     0.960     0.552
+
+  c_puct  (others at baseline: lr=0.0003, value_weight=0.25)
+         value      score(mean±std) seeds  res_rate  tie_rate
+           0.5          5.470±0.000     1     1.000     0.570  <- best
+          0.75          9.310±0.000     1     0.970     0.577
+             1          8.770±0.000     1     0.980     0.653
+          1.25         11.590±0.000     1     0.970     0.546
+           1.5          7.270±0.000     1     0.980     0.531
+             2         11.850±0.000     1     0.960     0.594
+           2.5          8.030±0.000     1     0.980     0.633
+             3          8.130±0.000     1     0.980     0.510
+             4         10.850±0.000     1     0.950     0.590
+             5          7.720±0.000     1     0.990     0.556
+
+  value_weight  (others at baseline: lr=0.0003, c_puct=1.5)
+         value      score(mean±std) seeds  res_rate  tie_rate
+          0.05          7.640±0.000     1     0.980     0.612
+           0.1          8.900±0.000     1     0.980     0.582
+          0.15          8.790±0.000     1     0.980     0.582
+          0.25          7.270±0.000     1     0.980     0.531
+           0.5          6.990±0.000     1     0.980     0.592
+          0.75          5.260±0.000     1     0.990     0.667  <- best
+
+  overall best config: lr=0.0003 c_puct=1.5 value_weight=0.75  (mean score 5.260, 1 seeds)
