@@ -97,18 +97,22 @@ def reward_function(
     agent_steps_taken: int, 
     baseline_steps_taken: int, 
     timeout_penalty: float,
+    max_steps: int,
     baseline_to_go: Optional[list[int,...]] = None, 
     ) -> float:
     if resolved:
-            # reward = float(baseline_to_go[t] - agent_steps_taken + t)
+            # reward = float(baseline_to_go[t] - agent_steps_taken + t)/max(max_steps, 1)
             # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
+            # reward = float((baseline_steps_taken - agent_steps_taken)/max(max_steps, 1))
             reward = float(baseline_steps_taken - agent_steps_taken)
             # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
             # reward = float(-agent_steps_taken + t)
     else:
-            reward = float(-timeout_penalty)
+            # reward = float(baseline_to_go[t] - (agent_steps_taken - t)) / max(max_steps, 1) - timeout_penalty
+            # reward = float(-timeout_penalty)/max(max_steps, 1)
             # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
             # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
+            reward = -timeout_penalty
     return reward
 # ===========================================================================================
 #  TRAINING LOOP
@@ -129,12 +133,13 @@ def self_play_episode(
     dirichlet_eps: float = 0.25,
     diag: Optional["Diagnostics"] = None, # for logging
     traj: Optional["TrajectoryLogger"] = None, # for logging 
-    episode_idx: int = -1 # for logging
+    episode_idx: int = -1, # for logging
+    timeout_multiplier: float = 2.0
     ) -> List[CGLGraph]:
     states = []
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
-    # baseline_to_go = []         ## min_sum rays-to-finish from each visited state
+    baseline_to_go = []         ## min_sum rays-to-finish from each visited state
 
     ## for data logging
     root_cone = next(iter(initial_state._cone_objects.values()))
@@ -162,7 +167,7 @@ def self_play_episode(
             resolved = True
             break
         
-        # if i >= 2 * baseline_steps_taken:
+        # if i >= timeout_multiplier * baseline_steps_taken:
         #     break
         
         result = search.run(state, temperature = temperature, add_root_noise = True, reuse_node = reuse_node)        
@@ -172,8 +177,8 @@ def self_play_episode(
         policies.append(torch.tensor(result.visit_probs, dtype = torch.float32))
         action_options_history.append(list(result.actions))
 
-        # baseline_from_here, _, _ = min_sum(state)
-        # baseline_to_go.append(baseline_from_here)
+        baseline_from_here, _, _ = min_sum(state)
+        baseline_to_go.append(baseline_from_here)
 
         # Training uses MCTS visit policy
         a = result.best_action
@@ -189,7 +194,7 @@ def self_play_episode(
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        reward = reward_function(resolved, t, state, agent_steps_taken, baseline_steps_taken, timeout_penalty)
+        reward = reward_function(resolved, t, state, agent_steps_taken, baseline_steps_taken, timeout_penalty, max_steps, baseline_to_go=baseline_to_go)
         rewards.append(reward)
 
         attach_targets(state, 
@@ -274,14 +279,17 @@ def train_one_epoch(
         "value_loss":  total_value  / steps,
     }
     
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """All train.py CLI args.  Exposed so sweep.py can discover the full set of
+    tunable hyperparameters (names, types, defaults) without drifting out of sync."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--epochs-per-iter", type=int, default=1)
     parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
+    parser.add_argument("--timeout-penalty", type=float, default=0.2) ## positive penalty -> negative reward
+    parser.add_argument("--timeout-multiplier", type=float, default=2.0) ## how many times the baseline are tolerated before the computation times out
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--det-min", type=int, default=2)
     parser.add_argument("--det-max", type=int, default=20)
@@ -310,8 +318,11 @@ def main() -> None:
     #parser.add_argument("--include-boundary-actions", action="store_true")
     #parser.add_argument("--grid-max-points", type=int, default=0)
     #parser.add_argument("--grid-random-trials", type=int, default=0)
+    return parser
 
-    args = parser.parse_args()
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     rng = random.Random(args.seed)
     np.random.seed(args.seed)
@@ -388,7 +399,8 @@ def main() -> None:
             dirichlet_eps=args.dirichlet_eps,
             diag=diag,
             traj=traj,
-            episode_idx=ep
+            episode_idx=ep,
+            timeout_multiplier = args.timeout_multiplier
         )
 
         replay.extend(examples)
