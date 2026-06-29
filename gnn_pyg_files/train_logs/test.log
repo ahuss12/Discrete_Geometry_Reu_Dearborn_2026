@@ -1,38 +1,0 @@
-config:
-  batch_size      = 8
-  c_puct          = 1.5
-  det_max         = 20
-  device          = cpu
-  diag_dir        = diagnostics
-  dirichlet_alpha = None
-  dirichlet_eps   = 0.25
-  dropout         = 0.05
-  embedding_size  = 7
-  episodes        = 5
-  epochs_per_iter = 1
-  hidden_dim      = 128
-  lr              = 0.0003
-  max_dimension   = 7
-  max_steps       = 20
-  mcts_sims       = 8
-  num_blocks      = 4
-  replay_capacity = 50000
-  resume          = 
-  save            = cone_action_gnn.pt
-  seed            = 0
-  temperature     = 1.0
-  timeout_penalty = 0.0
-  value_weight    = 0.25
-self-play:   0%|          | 0/5 [00:00<?, ?it/s]self-play:  20%|██        | 1/5 [00:01<00:07,  1.92s/it]self-play:  40%|████      | 2/5 [00:07<00:11,  3.79s/it]self-play:  60%|██████    | 3/5 [00:07<00:04,  2.28s/it]self-play:  80%|████████  | 4/5 [00:09<00:02,  2.03s/it]self-play: 100%|██████████| 5/5 [00:13<00:00,  3.03s/it]self-play: 100%|██████████| 5/5 [00:13<00:00,  2.79s/it]
-ep=1 replay=12 metrics={'loss': 5.062749624252319, 'policy_loss': 1.5653715133666992, 'value_loss': 13.98951244354248}
-ep=2 replay=32 metrics={'loss': 39.75966739654541, 'policy_loss': 2.4456158876419067, 'value_loss': 149.25620460510254}
-ep=3 replay=37 metrics={'loss': 34.19684112071991, 'policy_loss': 2.1585575342178345, 'value_loss': 128.15313243865967}
-ep=4 replay=57 metrics={'loss': 26.265838623046875, 'policy_loss': 2.612394332885742, 'value_loss': 94.6137752532959}
-ep=5 replay=77 metrics={'loss': 23.027041912078857, 'policy_loss': 2.530376136302948, 'value_loss': 81.98666381835938}
-saved cone_action_gnn.pt
-diagnostics written to diagnostics/:
-  optimality_gap     = diagnostics/optimality_gap.png
-  value_calibration  = diagnostics/value_calibration.png
-  episode_csv        = diagnostics/episode_quality.csv
-  calibration_csv    = diagnostics/value_calibration.csv
-  trajectories       = diagnostics/trajectories.jsonl

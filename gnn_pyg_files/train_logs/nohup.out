@@ -1,230 +1,0 @@
-/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python: can't open file '/Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/train.': [Errno 2] No such file or directory
-config:
-  batch_size      = 8
-  c_puct          = 1.5
-  det_max         = 20
-  device          = cpu
-  diag_dir        = diagnostics
-  dirichlet_alpha = None
-  dirichlet_eps   = 0.25
-  dropout         = 0.05
-  embedding_size  = 7
-  episodes        = 20
-  epochs_per_iter = 1
-  hidden_dim      = 128
-  lr              = 0.0003
-  max_dimension   = 7
-  max_steps       = 20
-  mcts_sims       = 16
-  num_blocks      = 4
-  replay_capacity = 50000
-  resume          = 
-  save            = cone_action_gnn.pt
-  seed            = 0
-  temperature     = 1.0
-  timeout_penalty = 0.0
-  value_weight    = 0.25
-self-play:   0%|          | 0/20 [00:00<?, ?it/s]self-play:   5%|▌         | 1/20 [00:04<01:22,  4.32s/it]self-play:  10%|█         | 2/20 [00:14<02:20,  7.83s/it]self-play:  15%|█▌        | 3/20 [00:15<01:16,  4.50s/it]self-play:  20%|██        | 4/20 [00:18<01:02,  3.93s/it]self-play:  25%|██▌       | 5/20 [00:27<01:28,  5.87s/it]self-play:  30%|███       | 6/20 [00:29<01:05,  4.64s/it]self-play:  35%|███▌      | 7/20 [00:31<00:46,  3.56s/it]self-play:  40%|████      | 8/20 [00:32<00:34,  2.88s/it]self-play:  45%|████▌     | 9/20 [00:33<00:25,  2.30s/it]self-play:  50%|█████     | 10/20 [00:55<01:24,  8.42s/it]self-play:  55%|█████▌    | 11/20 [01:03<01:14,  8.23s/it]self-play:  60%|██████    | 12/20 [01:03<00:46,  5.82s/it]config:
-  batch_size      = 8
-  c_puct          = 1.5
-  det_max         = 20
-  device          = cpu
-  diag_dir        = diagnostics
-  dirichlet_alpha = None
-  dirichlet_eps   = 0.25
-  dropout         = 0.05
-  embedding_size  = 7
-  episodes        = 20
-  epochs_per_iter = 1
-  hidden_dim      = 128
-  lr              = 0.0003
-  max_dimension   = 7
-  max_steps       = 20
-  mcts_sims       = 16
-  num_blocks      = 4
-  replay_capacity = 50000
-  resume          = 
-  save            = cone_action_gnn.pt
-  seed            = 0
-  temperature     = 1.0
-  timeout_penalty = 0.0
-  value_weight    = 0.25
-self-play:   0%|          | 0/20 [00:00<?, ?it/s]self-play:  65%|██████▌   | 13/20 [01:10<00:41,  5.95s/it]self-play:   5%|▌         | 1/20 [00:04<01:29,  4.71s/it]self-play:  70%|███████   | 14/20 [01:10<00:26,  4.37s/it]self-play:  75%|███████▌  | 15/20 [01:14<00:20,  4.17s/it]self-play:  80%|████████  | 16/20 [01:16<00:14,  3.59s/it]self-play:  85%|████████▌ | 17/20 [01:17<00:08,  2.67s/it]self-play:  90%|█████████ | 18/20 [01:17<00:03,  1.96s/it]self-play:  95%|█████████▌| 19/20 [01:17<00:01,  1.45s/it]self-play: 100%|██████████| 20/20 [01:18<00:00,  1.17s/it]self-play: 100%|██████████| 20/20 [01:18<00:00,  3.92s/it]
-ep=1 replay=13 metrics={'loss': 6.267908334732056, 'policy_loss': 1.6491183042526245, 'value_loss': 18.475160598754883}
-ep=2 replay=33 metrics={'loss': 40.62219285964966, 'policy_loss': 2.762382984161377, 'value_loss': 151.43923950195312}
-ep=3 replay=37 metrics={'loss': 31.707767963409424, 'policy_loss': 2.5286457538604736, 'value_loss': 116.71648979187012}
-ep=4 replay=57 metrics={'loss': 33.3383150100708, 'policy_loss': 2.9414168000221252, 'value_loss': 121.58759498596191}
-ep=5 replay=77 metrics={'loss': 30.40873622894287, 'policy_loss': 2.6233304738998413, 'value_loss': 111.14162254333496}
-ep=6 replay=93 metrics={'loss': 21.580268144607544, 'policy_loss': 2.4239630103111267, 'value_loss': 76.62521934509277}
-ep=7 replay=99 metrics={'loss': 20.1723575592041, 'policy_loss': 2.368579238653183, 'value_loss': 71.21511363983154}
-ep=8 replay=110 metrics={'loss': 17.613813161849976, 'policy_loss': 2.551416039466858, 'value_loss': 60.2495903968811}
-ep=9 replay=114 metrics={'loss': 18.841780424118042, 'policy_loss': 2.1604079008102417, 'value_loss': 66.72548961639404}
-ep=10 replay=134 metrics={'loss': 14.777950763702393, 'policy_loss': 2.1796790957450867, 'value_loss': 50.393086433410645}
-ep=11 replay=149 metrics={'loss': 20.367649793624878, 'policy_loss': 2.312876582145691, 'value_loss': 72.2190933227539}
-ep=12 replay=152 metrics={'loss': 14.134103298187256, 'policy_loss': 2.1749293208122253, 'value_loss': 47.836694955825806}
-ep=13 replay=172 metrics={'loss': 19.622256875038147, 'policy_loss': 2.24624964594841, 'value_loss': 69.50403022766113}
-ep=14 replay=176 metrics={'loss': 23.333585739135742, 'policy_loss': 2.3553908467292786, 'value_loss': 83.91277885437012}
-ep=15 replay=196 metrics={'loss': 19.633327960968018, 'policy_loss': 2.4119076430797577, 'value_loss': 68.88568115234375}
-ep=16 replay=204 metrics={'loss': 18.9118674993515, 'policy_loss': 2.300156533718109, 'value_loss': 66.4468445777893}
-ep=17 replay=208 metrics={'loss': 16.833234786987305, 'policy_loss': 2.176685094833374, 'value_loss': 58.62619876861572}
-ep=18 replay=210 metrics={'loss': 15.523595094680786, 'policy_loss': 2.089653432369232, 'value_loss': 53.73576736450195}
-ep=19 replay=211 metrics={'loss': 13.93894875049591, 'policy_loss': 2.2171484231948853, 'value_loss': 46.88719987869263}
-ep=20 replay=216 metrics={'loss': 19.957684755325317, 'policy_loss': 2.307812213897705, 'value_loss': 70.59949111938477}
-saved cone_action_gnn.pt
-diagnostics written to diagnostics/:
-  optimality_gap     = diagnostics/optimality_gap.png
-  value_calibration  = diagnostics/value_calibration.png
-  episode_csv        = diagnostics/episode_quality.csv
-  calibration_csv    = diagnostics/value_calibration.csv
-  trajectories       = diagnostics/trajectories.jsonl
-self-play:  10%|█         | 2/20 [00:15<02:34,  8.58s/it]self-play:  15%|█▌        | 3/20 [00:16<01:23,  4.89s/it]self-play:  20%|██        | 4/20 [00:19<01:06,  4.14s/it]self-play:  25%|██▌       | 5/20 [00:28<01:30,  6.04s/it]self-play:  30%|███       | 6/20 [00:31<01:06,  4.78s/it]self-play:  35%|███▌      | 7/20 [00:32<00:47,  3.67s/it]self-play:  40%|████      | 8/20 [00:34<00:35,  2.95s/it]self-play:  45%|████▌     | 9/20 [00:35<00:25,  2.35s/it]self-play:  50%|█████     | 10/20 [00:57<01:24,  8.42s/it]self-play:  55%|█████▌    | 11/20 [01:04<01:13,  8.21s/it]self-play:  60%|██████    | 12/20 [01:05<00:46,  5.81s/it]self-play:  65%|██████▌   | 13/20 [01:11<00:41,  5.88s/it]self-play:  70%|███████   | 14/20 [01:11<00:25,  4.31s/it]self-play:  75%|███████▌  | 15/20 [01:15<00:20,  4.06s/it]self-play:  80%|████████  | 16/20 [01:17<00:14,  3.51s/it]self-play:  85%|████████▌ | 17/20 [01:18<00:07,  2.60s/it]self-play:  90%|█████████ | 18/20 [01:18<00:03,  1.93s/it]self-play:  95%|█████████▌| 19/20 [01:18<00:01,  1.45s/it]self-play: 100%|██████████| 20/20 [01:19<00:00,  1.16s/it]self-play: 100%|██████████| 20/20 [01:19<00:00,  3.96s/it]
-ep=1 replay=13 metrics={'loss': 6.267908334732056, 'policy_loss': 1.6491183042526245, 'value_loss': 18.475160598754883}
-ep=2 replay=33 metrics={'loss': 40.62219285964966, 'policy_loss': 2.762382984161377, 'value_loss': 151.43923950195312}
-ep=3 replay=37 metrics={'loss': 31.707767963409424, 'policy_loss': 2.5286457538604736, 'value_loss': 116.71648979187012}
-ep=4 replay=57 metrics={'loss': 33.3383150100708, 'policy_loss': 2.9414168000221252, 'value_loss': 121.58759498596191}
-ep=5 replay=77 metrics={'loss': 30.40873622894287, 'policy_loss': 2.6233304738998413, 'value_loss': 111.14162254333496}
-ep=6 replay=93 metrics={'loss': 21.580268144607544, 'policy_loss': 2.4239630103111267, 'value_loss': 76.62521934509277}
-ep=7 replay=99 metrics={'loss': 20.1723575592041, 'policy_loss': 2.368579238653183, 'value_loss': 71.21511363983154}
-ep=8 replay=110 metrics={'loss': 17.613813161849976, 'policy_loss': 2.551416039466858, 'value_loss': 60.2495903968811}
-ep=9 replay=114 metrics={'loss': 18.841780424118042, 'policy_loss': 2.1604079008102417, 'value_loss': 66.72548961639404}
-ep=10 replay=134 metrics={'loss': 14.777950763702393, 'policy_loss': 2.1796790957450867, 'value_loss': 50.393086433410645}
-ep=11 replay=149 metrics={'loss': 20.367649793624878, 'policy_loss': 2.312876582145691, 'value_loss': 72.2190933227539}
-ep=12 replay=152 metrics={'loss': 14.134103298187256, 'policy_loss': 2.1749293208122253, 'value_loss': 47.836694955825806}
-ep=13 replay=172 metrics={'loss': 19.622256875038147, 'policy_loss': 2.24624964594841, 'value_loss': 69.50403022766113}
-ep=14 replay=176 metrics={'loss': 23.333585739135742, 'policy_loss': 2.3553908467292786, 'value_loss': 83.91277885437012}
-ep=15 replay=196 metrics={'loss': 19.633327960968018, 'policy_loss': 2.4119076430797577, 'value_loss': 68.88568115234375}
-ep=16 replay=204 metrics={'loss': 18.9118674993515, 'policy_loss': 2.300156533718109, 'value_loss': 66.4468445777893}
-ep=17 replay=208 metrics={'loss': 16.833234786987305, 'policy_loss': 2.176685094833374, 'value_loss': 58.62619876861572}
-ep=18 replay=210 metrics={'loss': 15.523595094680786, 'policy_loss': 2.089653432369232, 'value_loss': 53.73576736450195}
-ep=19 replay=211 metrics={'loss': 13.93894875049591, 'policy_loss': 2.2171484231948853, 'value_loss': 46.88719987869263}
-ep=20 replay=216 metrics={'loss': 19.957684755325317, 'policy_loss': 2.307812213897705, 'value_loss': 70.59949111938477}
-saved cone_action_gnn.pt
-diagnostics written to diagnostics/:
-  optimality_gap     = diagnostics/optimality_gap.png
-  value_calibration  = diagnostics/value_calibration.png
-  episode_csv        = diagnostics/episode_quality.csv
-  calibration_csv    = diagnostics/value_calibration.csv
-  trajectories       = diagnostics/trajectories.jsonl
-config:
-  batch_size      = 8
-  c_puct          = 1.5
-  det_max         = 20
-  device          = cpu
-  diag_dir        = diagnostics
-  dirichlet_alpha = None
-  dirichlet_eps   = 0.25
-  dropout         = 0.05
-  embedding_size  = 7
-  episodes        = 20
-  epochs_per_iter = 1
-  hidden_dim      = 128
-  lr              = 0.0003
-  max_dimension   = 7
-  max_steps       = 20
-  mcts_sims       = 16
-  num_blocks      = 4
-  replay_capacity = 50000
-  resume          = 
-  save            = cone_action_gnn.pt
-  seed            = 0
-  temperature     = 1.0
-  timeout_penalty = 0.0
-  value_weight    = 0.25
-self-play:   0%|          | 0/20 [00:00<?, ?it/s]ep=1 replay=13 metrics={'loss': 6.267908334732056, 'policy_loss': 1.6491183042526245, 'value_loss': 18.475160598754883}
-self-play:   5%|▌         | 1/20 [00:04<01:33,  4.93s/it]ep=2 replay=33 metrics={'loss': 40.62219285964966, 'policy_loss': 2.762382984161377, 'value_loss': 151.43923950195312}
-self-play:  10%|█         | 2/20 [00:17<02:45,  9.19s/it]ep=3 replay=37 metrics={'loss': 31.707767963409424, 'policy_loss': 2.5286457538604736, 'value_loss': 116.71648979187012}
-self-play:  15%|█▌        | 3/20 [00:17<01:29,  5.26s/it]ep=4 replay=57 metrics={'loss': 33.3383150100708, 'policy_loss': 2.9414168000221252, 'value_loss': 121.58759498596191}
-self-play:  20%|██        | 4/20 [00:21<01:12,  4.55s/it]ep=5 replay=77 metrics={'loss': 30.40873622894287, 'policy_loss': 2.6233304738998413, 'value_loss': 111.14162254333496}
-self-play:  25%|██▌       | 5/20 [00:31<01:39,  6.63s/it]ep=6 replay=93 metrics={'loss': 21.580268144607544, 'policy_loss': 2.4239630103111267, 'value_loss': 76.62521934509277}
-self-play:  30%|███       | 6/20 [00:33<01:12,  5.21s/it]ep=7 replay=99 metrics={'loss': 20.1723575592041, 'policy_loss': 2.368579238653183, 'value_loss': 71.21511363983154}
-self-play:  35%|███▌      | 7/20 [00:35<00:51,  3.97s/it]ep=8 replay=110 metrics={'loss': 17.613813161849976, 'policy_loss': 2.551416039466858, 'value_loss': 60.2495903968811}
-self-play:  40%|████      | 8/20 [00:36<00:38,  3.17s/it]ep=9 replay=114 metrics={'loss': 18.841780424118042, 'policy_loss': 2.1604079008102417, 'value_loss': 66.72548961639404}
-self-play:  45%|████▌     | 9/20 [00:37<00:27,  2.51s/it]ep=10 replay=134 metrics={'loss': 14.777950763702393, 'policy_loss': 2.1796790957450867, 'value_loss': 50.393086433410645}
-self-play:  50%|█████     | 10/20 [01:00<01:26,  8.69s/it]ep=11 replay=149 metrics={'loss': 20.367649793624878, 'policy_loss': 2.312876582145691, 'value_loss': 72.2190933227539}
-self-play:  55%|█████▌    | 11/20 [01:08<01:16,  8.51s/it]ep=12 replay=152 metrics={'loss': 14.134103298187256, 'policy_loss': 2.1749293208122253, 'value_loss': 47.836694955825806}
-self-play:  60%|██████    | 12/20 [01:08<00:48,  6.02s/it]ep=13 replay=172 metrics={'loss': 19.622256875038147, 'policy_loss': 2.24624964594841, 'value_loss': 69.50403022766113}
-self-play:  65%|██████▌   | 13/20 [01:15<00:42,  6.11s/it]ep=14 replay=176 metrics={'loss': 23.333585739135742, 'policy_loss': 2.3553908467292786, 'value_loss': 83.91277885437012}
-self-play:  70%|███████   | 14/20 [01:15<00:26,  4.48s/it]ep=15 replay=196 metrics={'loss': 19.633327960968018, 'policy_loss': 2.4119076430797577, 'value_loss': 68.88568115234375}
-self-play:  75%|███████▌  | 15/20 [01:19<00:21,  4.23s/it]ep=16 replay=204 metrics={'loss': 18.9118674993515, 'policy_loss': 2.300156533718109, 'value_loss': 66.4468445777893}
-self-play:  80%|████████  | 16/20 [01:21<00:14,  3.67s/it]ep=17 replay=208 metrics={'loss': 16.833234786987305, 'policy_loss': 2.176685094833374, 'value_loss': 58.62619876861572}
-self-play:  85%|████████▌ | 17/20 [01:22<00:08,  2.72s/it]ep=18 replay=210 metrics={'loss': 15.523595094680786, 'policy_loss': 2.089653432369232, 'value_loss': 53.73576736450195}
-self-play:  90%|█████████ | 18/20 [01:22<00:04,  2.00s/it]ep=19 replay=211 metrics={'loss': 13.93894875049591, 'policy_loss': 2.2171484231948853, 'value_loss': 46.88719987869263}
-self-play:  95%|█████████▌| 19/20 [01:22<00:01,  1.47s/it]ep=20 replay=216 metrics={'loss': 19.957684755325317, 'policy_loss': 2.307812213897705, 'value_loss': 70.59949111938477}
-self-play: 100%|██████████| 20/20 [01:23<00:00,  1.20s/it]self-play: 100%|██████████| 20/20 [01:23<00:00,  4.17s/it]
-saved cone_action_gnn.pt
-diagnostics written to diagnostics/:
-  optimality_gap     = diagnostics/optimality_gap.png
-  value_calibration  = diagnostics/value_calibration.png
-  episode_csv        = diagnostics/episode_quality.csv
-  calibration_csv    = diagnostics/value_calibration.csv
-  trajectories       = diagnostics/trajectories.jsonl
-config:
-  batch_size      = 8
-  c_puct          = 1.5
-  det_max         = 20
-  device          = cpu
-  diag_dir        = diagnostics
-  dirichlet_alpha = None
-  dirichlet_eps   = 0.25
-  dropout         = 0.05
-  embedding_size  = 7
-  episodes        = 20
-  epochs_per_iter = 1
-  hidden_dim      = 128
-  lr              = 0.0003
-  max_dimension   = 7
-  max_steps       = 20
-  mcts_sims       = 16
-  num_blocks      = 4
-  replay_capacity = 50000
-  resume          = 
-  save            = cone_action_gnn.pt
-  seed            = 0
-  temperature     = 1.0
-  timeout_penalty = 0.0
-  value_weight    = 0.25
-self-play:   0%|          | 0/20 [00:00<?, ?it/s]self-play:   5%|▌         | 1/20 [00:05<01:35,  5.03s/it]self-play:  10%|█         | 2/20 [00:17<02:48,  9.38s/it]self-play:  15%|█▌        | 3/20 [00:18<01:30,  5.35s/it]self-play:  20%|██        | 4/20 [00:21<01:13,  4.62s/it]self-play:  25%|██▌       | 5/20 [00:32<01:45,  7.02s/it]self-play:  30%|███       | 6/20 [00:35<01:17,  5.54s/it]self-play:  35%|███▌      | 7/20 [00:37<00:55,  4.25s/it]self-play:  40%|████      | 8/20 [00:38<00:40,  3.39s/it]self-play:  45%|████▌     | 9/20 [00:39<00:29,  2.70s/it]self-play:  50%|█████     | 10/20 [01:05<01:37,  9.79s/it]self-play:  55%|█████▌    | 11/20 [01:14<01:26,  9.57s/it]self-play:  60%|██████    | 12/20 [01:14<00:54,  6.77s/it]self-play:  65%|██████▌   | 13/20 [01:21<00:47,  6.82s/it]self-play:  70%|███████   | 14/20 [01:22<00:29,  5.00s/it]self-play:  75%|███████▌  | 15/20 [01:26<00:23,  4.68s/it]self-play:  80%|████████  | 16/20 [01:29<00:16,  4.02s/it]self-play:  85%|████████▌ | 17/20 [01:29<00:08,  2.97s/it]self-play:  90%|█████████ | 18/20 [01:29<00:04,  2.18s/it]self-play:  95%|█████████▌| 19/20 [01:30<00:01,  1.60s/it]self-play: 100%|██████████| 20/20 [01:30<00:00,  1.29s/it]self-play: 100%|██████████| 20/20 [01:30<00:00,  4.54s/it]
-ep=1 replay=13 metrics={'loss': 6.267908334732056, 'policy_loss': 1.6491183042526245, 'value_loss': 18.475160598754883}
-ep=2 replay=33 metrics={'loss': 40.62219285964966, 'policy_loss': 2.762382984161377, 'value_loss': 151.43923950195312}
-ep=3 replay=37 metrics={'loss': 31.707767963409424, 'policy_loss': 2.5286457538604736, 'value_loss': 116.71648979187012}
-ep=4 replay=57 metrics={'loss': 33.3383150100708, 'policy_loss': 2.9414168000221252, 'value_loss': 121.58759498596191}
-ep=5 replay=77 metrics={'loss': 30.40873622894287, 'policy_loss': 2.6233304738998413, 'value_loss': 111.14162254333496}
-ep=6 replay=93 metrics={'loss': 21.580268144607544, 'policy_loss': 2.4239630103111267, 'value_loss': 76.62521934509277}
-ep=7 replay=99 metrics={'loss': 20.1723575592041, 'policy_loss': 2.368579238653183, 'value_loss': 71.21511363983154}
-ep=8 replay=110 metrics={'loss': 17.613813161849976, 'policy_loss': 2.551416039466858, 'value_loss': 60.2495903968811}
-ep=9 replay=114 metrics={'loss': 18.841780424118042, 'policy_loss': 2.1604079008102417, 'value_loss': 66.72548961639404}
-ep=10 replay=134 metrics={'loss': 14.777950763702393, 'policy_loss': 2.1796790957450867, 'value_loss': 50.393086433410645}
-ep=11 replay=149 metrics={'loss': 20.367649793624878, 'policy_loss': 2.312876582145691, 'value_loss': 72.2190933227539}
-ep=12 replay=152 metrics={'loss': 14.134103298187256, 'policy_loss': 2.1749293208122253, 'value_loss': 47.836694955825806}
-ep=13 replay=172 metrics={'loss': 19.622256875038147, 'policy_loss': 2.24624964594841, 'value_loss': 69.50403022766113}
-ep=14 replay=176 metrics={'loss': 23.333585739135742, 'policy_loss': 2.3553908467292786, 'value_loss': 83.91277885437012}
-ep=15 replay=196 metrics={'loss': 19.633327960968018, 'policy_loss': 2.4119076430797577, 'value_loss': 68.88568115234375}
-ep=16 replay=204 metrics={'loss': 18.9118674993515, 'policy_loss': 2.300156533718109, 'value_loss': 66.4468445777893}
-ep=17 replay=208 metrics={'loss': 16.833234786987305, 'policy_loss': 2.176685094833374, 'value_loss': 58.62619876861572}
-ep=18 replay=210 metrics={'loss': 15.523595094680786, 'policy_loss': 2.089653432369232, 'value_loss': 53.73576736450195}
-ep=19 replay=211 metrics={'loss': 13.93894875049591, 'policy_loss': 2.2171484231948853, 'value_loss': 46.88719987869263}
-ep=20 replay=216 metrics={'loss': 19.957684755325317, 'policy_loss': 2.307812213897705, 'value_loss': 70.59949111938477}
-saved cone_action_gnn.pt
-diagnostics written to diagnostics/:
-  optimality_gap     = diagnostics/optimality_gap.png
-  value_calibration  = diagnostics/value_calibration.png
-  episode_csv        = diagnostics/episode_quality.csv
-  calibration_csv    = diagnostics/value_calibration.csv
-  trajectories       = diagnostics/trajectories.jsonl
-usage: train.py [-h] [--episodes EPISODES] [--epochs-per-iter EPOCHS_PER_ITER]
-                [--mcts-sims MCTS_SIMS] [--c-puct C_PUCT]
-                [--temperature TEMPERATURE]
-                [--timeout-penalty TIMEOUT_PENALTY] [--max-steps MAX_STEPS]
-                [--det-max DET_MAX] [--batch-size BATCH_SIZE] [--lr LR]
-                [--hidden-dim HIDDEN_DIM] [--num-blocks NUM_BLOCKS]
-                [--dropout DROPOUT] [--value-weight VALUE_WEIGHT]
-                [--replay-capacity REPLAY_CAPACITY] [--seed SEED]
-                [--device DEVICE] [--save SAVE] [--resume RESUME]
-                [--dirichlet-alpha DIRICHLET_ALPHA]
-                [--dirichlet-eps DIRICHLET_EPS]
-                [--embedding-size EMBEDDING_SIZE]
-                [--max-dimension MAX_DIMENSION] [--diag-dir DIAG_DIR]
-train.py: error: argument --episodes: invalid int value: '15000--mcts-sims'
-/Library/Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python: can't open file '/Users/felixsantiago/Desktop/MichiganREU/RL_repo/Discrete_Geometry_Reu_Dearborn_2026/gnn_pyg_files/train.py--episodes': [Errno 2] No such file or directory
-python: No such file or directory
-python: No such file or directory
