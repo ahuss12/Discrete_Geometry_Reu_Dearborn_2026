@@ -59,7 +59,7 @@ class Diagnostics:
         self._ep_f = open(self.episode_path, "w", newline="")
         self._ep_w = csv.writer(self._ep_f)
         self._ep_w.writerow(
-            ["episode", "n", "mult", "agent_rays", "baseline_rays", "gap", "resolved"]
+            ["episode", "n", "mult", "agent_rays", "baseline_rays", "gap", "random_rays", "random_resolved", "resolved"]
         )
 
         self._cal_f = open(self.calib_path, "w", newline="")
@@ -84,9 +84,11 @@ class Diagnostics:
 
     # ----- per-episode solution quality -----
     def log_episode(self, *, episode: int, n: int, mult: int,
-                    agent_rays: int, baseline_rays: int, resolved: bool) -> None:
-        gap = agent_rays - baseline_rays          # < 0 means agent beat the min_sum baseline
-        self._ep_w.writerow([episode, n, mult, agent_rays, baseline_rays, gap, int(resolved)])
+                agent_rays: int, baseline_rays: int,
+                random_rays: int, random_resolved: bool,
+                resolved: bool) -> None:
+        gap = agent_rays - baseline_rays
+        self._ep_w.writerow([episode, n, mult, agent_rays, baseline_rays, gap, random_rays, int(random_resolved), int(resolved)])
         self._ep_f.flush()
         self._episodes.append(episode)
         self._gaps.append(float(gap))

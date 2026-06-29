@@ -43,7 +43,7 @@ import numpy as np
 # ===========================================================================================
 
 def load_episode_csv(path: str) -> dict[str, list]:
-    cols = ["episode", "n", "mult", "agent_rays", "baseline_rays", "gap", "resolved"]
+    cols = ["episode", "n", "mult", "agent_rays", "baseline_rays", "gap", "random_rays", "random_resolved", "resolved"]
     out: dict[str, list] = {c: [] for c in cols}
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
@@ -355,6 +355,33 @@ def panel_train_loss(ax, tl: dict, w: int) -> None:
     ax.set_title("12. Training loss over training\n(fit-to-replay; total = policy + w\u00b7value)")
     ax.legend(fontsize=8)
 
+def panel_random_comparison(ax, ep: dict, w: int) -> None:
+    res = _resolved_mask(ep)
+    x = ep["episode"]
+    agent  = ep["agent_rays"]
+    rnd    = ep["random_rays"]
+
+    ## gap vs random: negative means agent beat random
+    gap_vs_random = [a - r for a, r in zip(agent, rnd)]
+
+    xr = [e for e, r in zip(x, res) if r]
+    gr = [g for g, r in zip(gap_vs_random, res) if r]
+    xt = [e for e, r in zip(x, res) if not r]
+
+    ax.axhline(0.0, color="gray", lw=1, ls="--", label="random baseline (gap = 0)")
+    if xr:
+        ax.scatter(xr, gr, s=12, alpha=0.3, color="C0", label="resolved")
+        ax.plot(xr, rolling_mean([float(g) for g in gr], w), color="C1", lw=2,
+                label=f"rolling mean (w={w})")
+    if xt:
+        ymin = min(gr) if gr else 0.0
+        ax.scatter(xt, [ymin - 0.5] * len(xt), s=10, marker="x", color="C3",
+                   alpha=0.5, label="timed out")
+    ax.set_xlabel("episode")
+    ax.set_ylabel("gap (agent \u2212 random)")
+    ax.set_title("Agent vs random baseline\n(lower better, <0 beats random)")
+    ax.legend(fontsize=8)
+
 # ===========================================================================================
 #  INITIAL CONE PANELS
 # ===========================================================================================
@@ -530,8 +557,10 @@ def main() -> None:
 
     panel_train_loss(axes[3, 2], tl, w)  # panel 11
 
-    ax_highdim = fig.add_subplot(gs[4, :])
-    panel_win_tie_loss_highdim(ax_highdim, ep, w)  # panel 13
+    ax_highdim = fig.add_subplot(gs[4, :2])
+    panel_win_tie_loss_highdim(ax_highdim, ep, w)
+    ax_random = fig.add_subplot(gs[4, 2])
+    panel_random_comparison(ax_random, ep, w)
 
     cfg_ax = fig.add_subplot(gs[5, :])
     render_config(cfg_ax, cfg)
@@ -568,6 +597,7 @@ def main() -> None:
             ("reward", lambda a: panel_reward(
                 a, ep, w, float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0)),
             ("train_loss", lambda a: panel_train_loss(a, tl, w)),
+            ("random_comparison", lambda a: panel_random_comparison(a, ep, w)),
             ("initial_mult", lambda a: panel_mult_hist(a, ep)),
             ("initial_dim", lambda a: panel_dim_hist(a, ep)),
         ]
