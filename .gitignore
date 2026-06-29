@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Trained model checkpoints
+gnn_pyg_files/cone_action_gnn.pt
+*.pt
+
+# Run outputs (results, logs, sweeps)
+gnn_pyg_files/results/
+gnn_pyg_files/train_logs/
+gnn_pyg_files/diag_probe/
+*.out
