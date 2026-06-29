@@ -179,6 +179,15 @@ def self_play_episode(
     baseline_steps_taken, baseline_fan, baseline_actions = min_sum(state)
     random_steps, random_resolved = random_baseline(initial_state, rng, max_steps=max_steps * 3)
 
+    search = MCTS(
+            model = model,
+            num_simulations = mcts_sims,
+            c_puct = c_puct,
+            dirichlet_alpha = dirichlet_alpha,
+            dirichlet_eps = dirichlet_eps,
+            device = device)
+    reuse_node = None
+
     ## run full MCTS from initial state to decomposition. 
     for i in range(max_steps):
         if state.isDecomposed():
