@@ -132,8 +132,7 @@ class MCTS:
 
                 node = node.children[action_index]
                     
-            # Backup. The leaf_value is from the leaf state. Crossing one edge
-            # back to the parent adds reward -1 for the subdivision action.
+            # Backup
             for parent, action_index in reversed(path):
                 parent.N[action_index] += 1
                 parent.W[action_index] += leaf_value
@@ -162,10 +161,8 @@ class MCTS:
         if state.isDecomposed():
             return [], np.zeros(0, dtype = np.float64,), 0.0
 
-        ## data = state.to(self.device)
-        ## self.model.eval()
-
-        out = self.model(state)
+        data = state.toHeteroData().to(self.device)
+        out = self.model(data)
         log_p = out["log_p"] ## retrieve log-probabilities of available actions
         value = out["value"]
 

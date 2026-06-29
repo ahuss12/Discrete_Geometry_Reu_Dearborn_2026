@@ -2,6 +2,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import time
 from datetime import datetime
 from typing import List, Optional
 from diagnostics import Diagnostics, extract_value
@@ -152,7 +153,7 @@ def self_play_episode(
     random_steps, random_resolved = random_baseline(initial_state, rng, max_steps=max_steps * 3)
 
     ## run full MCTS from initial state to decomposition. 
-    for _ in range(max_steps):
+    for i in range(max_steps):
         if state.isDecomposed():
             resolved = True
             break
@@ -303,7 +304,7 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--save", type=str, default="cone_action_gnn.pt")
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
-    parser.add_argument("--dirichlet-alpha", type=float, default=None)
+    parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
     parser.add_argument("--embedding-size", type=int, default=7)
     parser.add_argument("--min-dimension", type=int, default=3)
@@ -379,6 +380,7 @@ def main() -> None:
         g.addConeNode(Cone(generateRandomCone(n,d, rng = rng)))
         training_examples.append(g)
 
+    train_start = time.perf_counter()
     for ep in trange(args.episodes, desc="self-play", unit="ep",
                      bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}{postfix}]"):
         examples = self_play_episode(
@@ -424,6 +426,16 @@ def main() -> None:
         if (ep + 1) % 200 == 0:
             torch.save({"model": model.state_dict(), "args": vars(args), "episode": ep + 1},
                        args.save)
+
+    ## record wall-clock timing of the self-play/training loop (read by read_diagnostics.py)
+    train_elapsed = time.perf_counter() - train_start
+    sec_per_episode = train_elapsed / max(1, args.episodes)
+    with open(os.path.join(run_dir, "timing.json"), "w") as _f:
+        json.dump({"elapsed_seconds": train_elapsed,
+                   "episodes": args.episodes,
+                   "sec_per_episode": sec_per_episode}, _f, indent=2)
+    print(f"elapsed {train_elapsed:.1f}s over {args.episodes} episodes "
+          f"({sec_per_episode:.3f} s/episode)")
 
     ## for data visualization
     ## =======================================================================================

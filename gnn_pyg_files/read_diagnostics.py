@@ -1,30 +1,59 @@
 #!/usr/bin/env python3
-"""Read the diagnostics CSVs and emit interpretation graphs.
+"""Read a training run's diagnostics CSVs and render an interpretation report.
 
-Consumes:
-  <diag-dir>/episode_quality.csv    columns: episode,n,mult,agent_rays,baseline_rays,gap,resolved
-  <diag-dir>/value_calibration.csv  columns: episode,state_idx,predicted_value,target_value
+WHAT IT READS  (all relative to the run directory, --directory)
+  episode_quality.csv    REQUIRED  cols: episode,n,mult,agent_rays,baseline_rays,gap,resolved
+  value_calibration.csv  optional  cols: episode,state_idx,predicted_value,target_value
+  train_loss.csv         optional  cols: episode,loss,policy_loss,value_loss
+  timing.json            optional  {elapsed_seconds, episodes, sec_per_episode}
+  config.json            optional  hyperparameter dump (see also --config / --checkpoint)
+Missing optional files degrade gracefully -- their panels just print a placeholder.
 
-Emits a nine-panel report (and optionally the panels individually):
-  1. Optimality-gap learning curve   (resolved-only rolling mean; timeouts marked)
-  2. Resolution rate over training   (rolling fraction reaching a unimodular fan)
-  3. Win / tie / loss over training  (resolved-only; <baseline / =baseline / >baseline)
-  4. Parity: agent vs min_sum rays   (resolved-only scatter, y = x)
-  5. Gap vs root multiplicity        (resolved-only; where it struggles by mult)
-  6. Resolution rate vs multiplicity (bucketed; where it fails to resolve at all)
-  7. Gap distribution                (resolved-only; mass <=0 ties or beats min_sum)
-  8. Value-head calibration          (predicted vs target, colored by episode)
-  9. Value-head error over training  (per-episode mean |pred - target|, rolling)
- 10. Raw episode reward over training (terminal_reward - rays; >0 beats min_sum)
- 11. Training loss over training      (total/policy/value; fit-to-replay)
+WHAT IT WRITES  (into the run directory, unless --out is given)
+  report.png         the multi-panel figure described below
+  initial_cones.png  a second figure: histograms of the dim/mult of cones fed to self-play
+  panel_*.png        one PNG per panel, only when --split is passed
 
-NOTE: agent_rays is censored at max_steps on timed-out episodes, so its gap is a
-lower bound, not a real optimality gap. Every gap/parity panel below therefore
-uses RESOLVED episodes only; timeouts are summarized separately (panels 2 and 6).
+REPORT PANELS
+   1. Comparison to min_sum        gap learning curve (resolved-only mean; timeouts marked)
+   2. Resolution rate              rolling fraction of episodes reaching a unimodular fan
+   3. Win / tie / loss             resolved-only: gap <0 / ==0 / >0 vs min_sum
+   4. Agent vs min_sum (parity)    resolved-only scatter, below y=x means agent used fewer rays
+   5. Gap vs multiplicity          resolved-only; where it struggles by root mult(sigma)
+   6. Resolution rate vs mult      bucketed; where it fails to resolve at all
+   7. Resolution rate vs dimension per-dimension resolve rate
+   8. Gap distribution             resolved-only histogram; mass <=0 ties or beats min_sum
+   9. Value-head calibration       predicted vs target value, colored by episode
+  10. Value-head error             per-episode mean |pred - target|, rolling
+  11. Raw episode reward           terminal_reward - rays (= -gap when resolved); >0 beats min_sum
+  12. Training loss                total / policy / value, fit-to-replay
+  13. Win / tie / loss (dim>=3)    panel 3 restricted to 3D+ (beating min_sum is impossible in 2D)
+  + a hyperparameter strip at the bottom (from config.json / --config / the checkpoint args).
 
-Usage:
-  python read_diagnostics.py --directory diagnostics
-  python read_diagnostics.py --directory diagnostics --rolling 25 --split
+NOTE: agent_rays is censored at max_steps on timed-out episodes, so a timeout's gap is a
+lower bound, not a real optimality gap. Every gap/parity panel uses RESOLVED episodes only;
+timeouts are summarized separately (panels 2, 6, 7).
+
+USAGE
+  # default: pick the latest run under gnn_pyg_files/results/ and write report.png there
+  python read_diagnostics.py
+
+  # a specific run, with a wider smoothing window and per-panel PNGs
+  python read_diagnostics.py --directory results/20260627_222614 --rolling 25 --split
+
+  # supply hyperparameters explicitly, or pull them from a checkpoint, and skip the note prompt
+  python read_diagnostics.py --config run_config.json --note "baseline, det_max=12"
+  python read_diagnostics.py --checkpoint cone_action_gnn.pt --note ""
+
+KEY FLAGS
+  --directory DIR     run dir holding the CSVs (default: latest under results/)
+  --rolling N         rolling-window width for smoothed curves (default 20)
+  --split             also write each panel as its own panel_*.png
+  --note TEXT         caption stamped in report.png's corner; if omitted you are prompted
+                      (pass --note "" to suppress the prompt in non-interactive runs)
+  --config JSON       hyperparameter file to display; else config.json, else --checkpoint args
+  --checkpoint PT     model .pt to read hyperparameters from (default cone_action_gnn.pt)
+  --out PNG / --episode-csv / --calibration-csv   override the default output / input paths
 """
 from __future__ import annotations
 import argparse
@@ -84,6 +113,49 @@ def rolling_mean(xs: list[float], w: int) -> list[float]:
         window = xs[lo:i + 1]
         out.append(sum(window) / len(window))
     return out
+
+
+def _fmt_hms(seconds: float) -> str:
+    """Format a duration in seconds as M:SS (or H:MM:SS when >= 1 hour)."""
+    seconds = int(round(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+def load_timing(directory: str, n_ep: int) -> Optional[dict]:
+    """Return {elapsed_seconds, sec_per_episode, approximate} for the run, or None.
+
+    Prefers timing.json (written by train.py).  If that is absent (e.g. an older
+    run), estimates the elapsed time from file mtimes -- config.json is written at
+    the start of the run and episode_quality.csv is last flushed at the end of the
+    training loop -- and flags the result as approximate.
+    """
+    import json
+    p = os.path.join(directory, "timing.json")
+    if os.path.exists(p):
+        try:
+            with open(p) as f:
+                d = dict(json.load(f))
+            el = float(d["elapsed_seconds"])
+            eps = int(d.get("episodes", n_ep)) or n_ep
+            spe = float(d.get("sec_per_episode", el / max(1, eps)))
+            return {"elapsed_seconds": el, "sec_per_episode": spe, "approximate": False}
+        except Exception as e:
+            print(f"[timing] could not read {p}: {e}")
+
+    cfg_p = os.path.join(directory, "config.json")
+    ep_p = os.path.join(directory, "episode_quality.csv")
+    try:
+        if os.path.exists(cfg_p) and os.path.exists(ep_p):
+            el = os.path.getmtime(ep_p) - os.path.getmtime(cfg_p)
+            if el > 0:
+                return {"elapsed_seconds": el,
+                        "sec_per_episode": el / max(1, n_ep),
+                        "approximate": True}
+    except OSError:
+        pass
+    return None
 
 
 def _resolved_mask(ep: dict) -> list[bool]:
@@ -480,6 +552,17 @@ def render_config(ax, cfg: Optional[dict], ncols: int = 4) -> None:
             transform=ax.transAxes,
             bbox=dict(boxstyle="round", facecolor="#f5f5f5", edgecolor="#cccccc"))
 
+
+def render_note(ax, note: Optional[str]) -> None:
+    """Draw the run note in its own box, sized to sit right of the hyperparameters."""
+    ax.axis("off")
+    ax.set_title("Note", fontsize=11, loc="left")
+    if not note:
+        return
+    ax.text(0.0, 1.0, note, ha="left", va="top", fontsize=9.5, color="#333333",
+            wrap=True, transform=ax.transAxes,
+            bbox=dict(boxstyle="round", facecolor="#fff7cc", edgecolor="#cccccc"))
+
 def write_initial_cones(ep: dict, out_png: str) -> str:
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     panel_mult_hist(axes[0], ep)
@@ -516,7 +599,17 @@ def main() -> None:
                     help="model .pt to read hyperparameters from if --config absent")
     ap.add_argument("--split", action="store_true",
                     help="also write each panel as its own PNG")
+    ap.add_argument("--note", default=None,
+                    help="note to display in the bottom-right of report.png "
+                         "(if omitted, you will be prompted to type one)")
     args = ap.parse_args()
+
+    # ask the user for a note unless one was passed on the command line
+    if args.note is None:
+        try:
+            args.note = input("Note for report.png (blank for none): ").strip()
+        except EOFError:  # non-interactive (piped) invocation
+            args.note = ""
     if args.directory is None:
         args.directory = _latest_run_dir()
 
@@ -562,18 +655,32 @@ def main() -> None:
     ax_random = fig.add_subplot(gs[4, 2])
     panel_random_comparison(ax_random, ep, w)
 
-    cfg_ax = fig.add_subplot(gs[5, :])
+    cfg_ax = fig.add_subplot(gs[5, :2])
     render_config(cfg_ax, cfg)
+
+    # note lives in its own box directly to the right of the hyperparameters
+    note_ax = fig.add_subplot(gs[5, 2])
+    render_note(note_ax, args.note)
 
     res_rate = sum(ep["resolved"]) / n_ep
     win  = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g < 0)
     ties = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g == 0)
+
+    timing = load_timing(args.directory, n_ep)
+    timing_str = ""
+    if timing:
+        approx = "~" if timing["approximate"] else ""
+        timing_str = (f"  |  elapsed {approx}{_fmt_hms(timing['elapsed_seconds'])} "
+                      f"({approx}{timing['sec_per_episode']:.2f} s/ep)")
+
     fig.suptitle(
         f"Diagnostics report  |  {n_ep} episodes  |  resolved {res_rate:.0%}  "
         f"|  beats min_sum {win}/{n_res} resolved ({win/n_res:.0%})"
         f"|  ties min_sum {ties}/{n_res} resolved ({ties/n_res:.0%})  "
-        f"|  gap panels drop {dropped} timed-out",
+        f"|  gap panels drop {dropped} timed-out"
+        f"{timing_str}",
         fontsize=10)
+
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
     print(f"wrote {out_png}")
 
