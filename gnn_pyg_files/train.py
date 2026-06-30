@@ -406,7 +406,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replay-capacity", type=int, default=50_000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--save", type=str, default="cone_action_gnn.pt")
+    parser.add_argument("--save", type=str, default=None,
+                        help="Where to write the checkpoint. Defaults to <run_dir>/model.pt "
+                             "so each run keeps its own model alongside its diagnostics.")
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
@@ -469,6 +471,9 @@ def main() -> None:
     ## =======================================================================================
     run_dir = os.path.join(args.diag_dir, datetime.now().strftime("%Y%m%d_%H%M%S"))
     os.makedirs(run_dir, exist_ok=True)
+    ## default checkpoint lives inside this run's folder so it is never silently
+    ## overwritten by a later run and stays co-located with its config/diagnostics.
+    save_path = args.save if args.save else os.path.join(run_dir, "model.pt")
     with open(os.path.join(run_dir, "config.json"), "w") as _f:
         json.dump(vars(args), _f, indent=2)
     diag = Diagnostics(outdir=run_dir)
@@ -539,7 +544,7 @@ def main() -> None:
         # ---- periodic checkpoint (NEW) ----  <-- here, inside the loop, outside the batch-size gate
         if (ep + 1) % 200 == 0:
             torch.save({"model": model.state_dict(), "args": vars(args), "episode": ep + 1},
-                       args.save)
+                       save_path)
 
     ## record wall-clock timing of the self-play/training loop (read by read_diagnostics.py)
     train_elapsed = time.perf_counter() - train_start
@@ -553,8 +558,8 @@ def main() -> None:
 
     ## for data visualization
     ## =======================================================================================
-    torch.save({"model": model.state_dict(), "args": vars(args)}, args.save)
-    print(f"saved {args.save}")
+    torch.save({"model": model.state_dict(), "args": vars(args)}, save_path)
+    print(f"saved {save_path}")
 
     traj.close()
     paths = diag.finish()
