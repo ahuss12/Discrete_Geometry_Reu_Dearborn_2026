@@ -1,3 +1,52 @@
+# ===========================================================================================
+#  train.py — AlphaZero-style self-play training for cone resolution
+# ===========================================================================================
+#
+#  WHAT IT DOES
+#  ------------
+#  Trains a GNN (policy + value heads) by self-play with MCTS. Each episode starts from a
+#  random singular cone and the agent inserts subdivision rays until the cone is resolved
+#  (decomposed into smooth cones) or it times out. The min_sum heuristic and a random policy
+#  are run on the same cone as baselines for comparison. Visited states get (policy, value)
+#  targets attached and are pushed into a replay buffer; the network trains on minibatches
+#  sampled from that buffer.
+#
+#  USAGE
+#  -----
+#  Run from this directory (gnn_pyg_files/) so the local imports resolve:
+#
+#      python train.py                          # train with all defaults
+#      python train.py --episodes 500 --device cuda
+#      python train.py --resume cone_action_gnn.pt --save run2.pt
+#
+#  KEY ARGUMENTS (see build_parser() for the full list + defaults)
+#  ---------------------------------------------------------------
+#    --episodes N            number of self-play episodes to run
+#    --mcts-sims N           MCTS simulations per move (higher = stronger, slower)
+#    --max-steps N           max subdivisions per episode before timeout
+#    --min-dimension/-max    range of cone dimension n sampled per episode
+#    --det-min/--det-max     range of cone determinant (multiplicity) sampled per episode
+#    --lr, --hidden-dim,     network / optimizer hyperparameters
+#      --num-blocks, --dropout, --value-weight, --batch-size
+#    --timeout-penalty       penalty added to reward when an episode times out
+#    --timeout-multiplier    timeout threshold as a multiple of the baseline step count
+#    --early-termination     stop an episode once it exceeds timeout-multiplier * baseline
+#    --resolved-reward-type  index (0-5) selecting the reward variant for resolved episodes
+#    --timeout-reward-type   index (0-3) selecting the reward variant for timed-out episodes
+#    --resume PATH           continue training from an existing checkpoint
+#    --save PATH             where to write the final / periodic checkpoint
+#    --diag-dir DIR          parent dir for per-run diagnostics (a timestamped subdir is made)
+#    --seed N, --device STR  reproducibility / cuda|cpu
+#
+#  OUTPUTS
+#  -------
+#    --save checkpoint (.pt)         model weights + args; also saved every 200 episodes
+#    <diag-dir>/<timestamp>/         config.json, timing.json, trajectories.jsonl, and the
+#                                    diagnostics CSVs/plots produced by Diagnostics.finish().
+#  Inspect a run afterwards with read_diagnostics.py / hyp_visualizations.py.
+#  Sweep hyperparameters with hyp_sweep.py (it discovers args via build_parser()).
+# ===========================================================================================
+
 from __future__ import annotations
 import argparse
 import json
@@ -124,6 +173,7 @@ def reward_function(
     baseline_steps_taken: int, 
     timeout_penalty: float,
     max_steps: int,
+    baseline_left: int,
     baseline_to_go: Optional[list[int,...]] = None, 
     ) -> float:
     if resolved:
@@ -132,7 +182,9 @@ def reward_function(
             lambda: float(-agent_steps_taken + t), #1 all negative reward, no baseline
             lambda: sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t), #2 log-sum-mult
             lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #3 normalized standard
-            lambda: float(baseline_to_go[t] - agent_steps_taken + t)/max(baseline_steps_taken, 1) #4 potential-shaped per-state standard
+            lambda: float(baseline_to_go[t] - agent_steps_taken + t)/max(baseline_steps_taken, 1), #4 potential-shaped per-state standard
+            lambda: 1.0 + float(np.clip((baseline_to_go[t] - agent_steps_taken + t) / max(baseline_steps_taken, 1), -1.0, 1.0)), #5 possible fix to #4. Makes resolution always look good
+            lambda: float(-agent_steps_taken)
         ]
         reward = variants[resolved_reward_type]()
             
@@ -140,7 +192,8 @@ def reward_function(
         variants = [
             lambda: -timeout_penalty, #0 standard
             lambda: float(-timeout_penalty)/max(baseline_steps_taken, 1), #1 normalized standard
-            lambda: float(baseline_to_go[t] - (agent_steps_taken - t)) / max(baseline_steps_taken, 1) - timeout_penalty #2 normalized and per-state shaped
+            lambda: float(baseline_to_go[t] - (agent_steps_taken - t)) / max(baseline_steps_taken, 1) - timeout_penalty, #2 normalized and per-state shaped
+            lambda: -float(np.clip((agent_steps_taken - t + baseline_left) / max(baseline_steps_taken, 1), 0.0, 2.0)) - timeout_penalty, #3 clipped and normalized
         ]
         reward = variants[timeout_reward_type]()
     return reward
@@ -220,6 +273,12 @@ def self_play_episode(
         a = result.best_action
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
+
+    if resolved: 
+        baseline_left = 0 
+    else:
+        baseline_left,_ ,_ = min_sum(state)
+        
     
     examples: List[HeteroData] = []
     agent_steps_taken = len(states) 
@@ -236,6 +295,7 @@ def self_play_episode(
         baseline_steps_taken, 
         timeout_penalty, 
         max_steps, 
+        baseline_left=baseline_left,
         baseline_to_go=baseline_to_go)
         rewards.append(reward)
 

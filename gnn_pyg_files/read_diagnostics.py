@@ -243,6 +243,32 @@ def panel_win_tie_loss_highdim(ax, ep: dict, w: int, min_dim: int = 3) -> None:
     ax.legend(fontsize=8, loc="lower left")
 
 
+def panel_win_tie_loss_random(ax, ep: dict, w: int) -> None:
+    # Like panel 3, but vs the random baseline instead of min_sum. Restricted to
+    # episodes where BOTH agent and random resolved (otherwise a ray count is a
+    # censored timeout, not a real comparison): win = agent_rays < random_rays,
+    # tie = equal, loss = agent_rays > random_rays.
+    res = _resolved_mask(ep)
+    mask = [r and bool(rr) for r, rr in zip(res, ep["random_resolved"])]
+    xr = [e for e, m in zip(ep["episode"], mask) if m]
+    ar = [a for a, m in zip(ep["agent_rays"], mask) if m]
+    rr = [r for r, m in zip(ep["random_rays"], mask) if m]
+    if not xr:
+        ax.text(0.5, 0.5, "no episodes where both\nagent and random resolved",
+                ha="center", va="center")
+        ax.set_title("Win / tie / loss vs random"); return
+    win  = rolling_mean([1.0 if a < r else 0.0 for a, r in zip(ar, rr)], w)
+    tie  = rolling_mean([1.0 if a == r else 0.0 for a, r in zip(ar, rr)], w)
+    loss = rolling_mean([1.0 if a > r else 0.0 for a, r in zip(ar, rr)], w)
+    ax.stackplot(xr, win, tie, loss,
+                 labels=["beats random", "ties", "worse"],
+                 colors=["C2", "C7", "C3"], alpha=0.85)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("episode"); ax.set_ylabel("fraction (rolling)")
+    ax.set_title("Win / tie / loss vs random\n(both resolved only)")
+    ax.legend(fontsize=8, loc="lower left")
+
+
 def panel_parity(ax, ep: dict) -> None:
     # Each resolved episode: (min_sum rays, agent rays). Below y=x line = agent beat it.
     res = _resolved_mask(ep)
@@ -628,7 +654,7 @@ def main() -> None:
 
     # 4x3 panel grid + 1 wide extra row + config strip
     fig = plt.figure(figsize=(18, 22))
-    gs = fig.add_gridspec(6, 3, height_ratios=[1, 1, 1, 1, 0.7, 0.42], hspace=0.5, wspace=0.25)
+    gs = fig.add_gridspec(6, 3, height_ratios=[1, 1, 1, 1, 1, 0.42], hspace=0.5, wspace=0.25)
     axes = np.empty((4, 3), dtype=object)
     for r in range(4):
         for c in range(3):
@@ -650,8 +676,10 @@ def main() -> None:
 
     panel_train_loss(axes[3, 2], tl, w)  # panel 11
 
-    ax_highdim = fig.add_subplot(gs[4, :2])
+    ax_highdim = fig.add_subplot(gs[4, 0])
     panel_win_tie_loss_highdim(ax_highdim, ep, w)
+    ax_wtl_random = fig.add_subplot(gs[4, 1])
+    panel_win_tie_loss_random(ax_wtl_random, ep, w)
     ax_random = fig.add_subplot(gs[4, 2])
     panel_random_comparison(ax_random, ep, w)
 
@@ -666,6 +694,20 @@ def main() -> None:
     win  = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g < 0)
     ties = sum(1 for g, r in zip(ep["gap"], ep["resolved"]) if r and g == 0)
 
+    # vs random: among episodes where both agent and random resolved
+    both = [bool(r) and bool(rr) for r, rr in zip(ep["resolved"], ep["random_resolved"])]
+    n_both = sum(both)
+    beat_rnd = sum(1 for a, rr, m in zip(ep["agent_rays"], ep["random_rays"], both)
+                   if m and a < rr)
+    tie_rnd = sum(1 for a, rr, m in zip(ep["agent_rays"], ep["random_rays"], both)
+                  if m and a == rr)
+    if n_both:
+        beat_rnd_str = f"beats random {beat_rnd}/{n_both} ({beat_rnd / n_both:.0%})"
+        tie_rnd_str  = f"ties random {tie_rnd}/{n_both} ({tie_rnd / n_both:.0%})"
+    else:
+        beat_rnd_str = "beats random n/a"
+        tie_rnd_str  = "ties random n/a"
+
     timing = load_timing(args.directory, n_ep)
     timing_str = ""
     if timing:
@@ -673,12 +715,14 @@ def main() -> None:
         timing_str = (f"  |  elapsed {approx}{_fmt_hms(timing['elapsed_seconds'])} "
                       f"({approx}{timing['sec_per_episode']:.2f} s/ep)")
 
+    timeout_rate = dropped / n_ep
     fig.suptitle(
         f"Diagnostics report  |  {n_ep} episodes  |  resolved {res_rate:.0%}  "
-        f"|  beats min_sum {win}/{n_res} resolved ({win/n_res:.0%})"
-        f"|  ties min_sum {ties}/{n_res} resolved ({ties/n_res:.0%})  "
-        f"|  gap panels drop {dropped} timed-out"
-        f"{timing_str}",
+        f"|  timed out {timeout_rate:.0%}"
+        f"{timing_str}\n"
+        f"beats min_sum {win}/{n_res} ({win/n_res:.0%})  "
+        f"|  ties min_sum {ties}/{n_res} ({ties/n_res:.0%})  "
+        f"|  {beat_rnd_str}  |  {tie_rnd_str}",
         fontsize=10)
 
     fig.savefig(out_png, dpi=150, bbox_inches="tight")
@@ -704,6 +748,7 @@ def main() -> None:
             ("reward", lambda a: panel_reward(
                 a, ep, w, float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0)),
             ("train_loss", lambda a: panel_train_loss(a, tl, w)),
+            ("win_tie_loss_random", lambda a: panel_win_tie_loss_random(a, ep, w)),
             ("random_comparison", lambda a: panel_random_comparison(a, ep, w)),
             ("initial_mult", lambda a: panel_mult_hist(a, ep)),
             ("initial_dim", lambda a: panel_dim_hist(a, ep)),

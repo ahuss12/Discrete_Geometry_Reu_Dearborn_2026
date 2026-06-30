@@ -39,15 +39,17 @@ from train import build_parser
 #  TUNABLE SURFACE -- discovered from train.py's own argument parser.
 # ===========================================================================================
 def _discover():
-    defaults, types = {}, {}
+    defaults, types, bools = {}, {}, set()
     for a in build_parser()._actions:
         if a.dest == "help":
             continue
         defaults[a.dest] = a.default
         types[a.dest] = a.type or str
-    return defaults, types
+        if isinstance(a, (argparse._StoreTrueAction, argparse._StoreFalseAction)):
+            bools.add(a.dest)                          # store_true/false take no value
+    return defaults, types, bools
 
-DEFAULTS, TYPES = _discover()
+DEFAULTS, TYPES, BOOL_FLAGS = _discover()
 RESERVED = {"seed", "save", "diag_dir", "resume"}     # managed by the harness; not swept
 TUNABLE = [k for k in DEFAULTS if k not in RESERVED]
 SUMMARY_META = ["trial", "seed", "axis", "status", "score", "resolution_rate",
@@ -59,6 +61,8 @@ def _flag(name: str) -> str:
     return "--" + name.replace("_", "-")
 
 def _cast(name: str, s: str):
+    if name in BOOL_FLAGS:
+        return str(s).strip().lower() in ("1", "true", "yes", "on")
     try:
         return TYPES[name](s)
     except (ValueError, TypeError):
@@ -135,7 +139,11 @@ def run_one(cfg: dict, seed: int, run_dir: str) -> dict:
            "--diag-dir", diag_dir, "--save", os.path.join(diag_dir, "model.pt"),
            "--seed", str(seed)]
     for k, v in params.items():
-        cmd += [_flag(k), str(v)]
+        if k in BOOL_FLAGS:
+            if v:                                     # store_true: emit the bare flag only when enabled
+                cmd += [_flag(k)]
+        else:
+            cmd += [_flag(k), str(v)]
 
     t0 = time.perf_counter()
     with open(os.path.join(diag_dir, "train.log"), "w") as logf:
@@ -212,7 +220,7 @@ def _latest_run(outdir: str) -> str | None:
 
 def _write_reports(run_dir: str) -> None:
     try:
-        import visualizations
+        import hyp_visualizations as visualizations
         visualizations.make_reports(run_dir)
     except Exception as e:                            # plotting must never sink a finished sweep
         print(f"[report] skipped: {e}")

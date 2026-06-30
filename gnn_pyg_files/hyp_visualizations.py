@@ -124,11 +124,14 @@ def gap_series(ep):
     y = [float(g) for g, r in zip(ep["gap"], res) if r]
     return x, y
 
-def reward_series(ep, tp):
-    res = _resolved_mask(ep)
-    x, y = [], []
-    for e, a, b, r in zip(ep["episode"], ep["agent_rays"], ep["baseline_rays"], res):
-        x.append(e); y.append(float(b - a) if r else float(-tp))
+def rays_saved_series(ep):
+    """Rays saved vs min_sum (baseline - agent) from logged ray counts, all
+    episodes.  >0 beats baseline; timeout episodes are censored lower bounds.
+    This is a fixed quality metric, NOT the training reward -- the actual reward
+    depends on resolved_reward_type/timeout_reward_type (and is per-state for the
+    shaped variants), so it cannot be faithfully reconstructed here."""
+    x = [e for e in ep["episode"]]
+    y = [float(b - a) for a, b in zip(ep["agent_rays"], ep["baseline_rays"])]
     return x, y
 
 def resolution_series(ep):
@@ -247,7 +250,6 @@ def build_axis_report(rows, axis, baseline, out_dir):
     grid_max = max(len(ep["episode"]) for runs in loaded.values() for ep, _, _ in runs)
     n_seed = max(len(rs) for _, rs in groups)
     w = max(1, grid_max // 12)
-    tp = float(baseline.get("timeout_penalty", 1.0))
 
     fig = plt.figure(figsize=(20, 21))
     gs = fig.add_gridspec(4, 4, height_ratios=[1, 1, 1, 1.1], hspace=0.5, wspace=0.28)
@@ -264,7 +266,7 @@ def build_axis_report(rows, axis, baseline, out_dir):
         eps = [t[0] for t in loaded[k]]; cals = [t[1] for t in loaded[k]]; tls = [t[2] for t in loaded[k]]
         plot_agg(ax[0, 0], [gap_series(e) for e in eps], w, col, grid_max)
         plot_agg(ax[0, 1], [resolution_series(e) for e in eps], w, col, grid_max)
-        plot_agg(ax[0, 2], [reward_series(e, tp) for e in eps], w, col, grid_max)
+        plot_agg(ax[0, 2], [rays_saved_series(e) for e in eps], w, col, grid_max)
         plot_agg(ax[0, 3], [tie_series(e) for e in eps], w, col, grid_max)
         plot_agg(ax[1, 0], [calib_err_series(c) for c in cals], w, col, grid_max)
         plot_agg(ax[1, 1], [loss_series(t, "loss") for t in tls], w, col, grid_max)
@@ -277,8 +279,8 @@ def build_axis_report(rows, axis, baseline, out_dir):
     ax[0, 1].set_title("Resolution rate\nrolling mean, higher better")
     ax[0, 1].set_xlabel("episode"); ax[0, 1].set_ylabel("resolved fraction"); ax[0, 1].set_ylim(-0.02, 1.02)
     ax[0, 2].axhline(0, color="gray", lw=1, ls="--")
-    ax[0, 2].set_title("Episode reward (baseline - agent)\nrolling mean, higher better")
-    ax[0, 2].set_xlabel("episode"); ax[0, 2].set_ylabel("reward")
+    ax[0, 2].set_title("Rays saved vs min_sum (baseline - agent)\nall episodes; >0 beats baseline, timeouts censored")
+    ax[0, 2].set_xlabel("episode"); ax[0, 2].set_ylabel("baseline - agent rays")
     ax[0, 3].set_title("Tie rate with min_sum\nrolling mean"); ax[0, 3].set_xlabel("episode")
     ax[0, 3].set_ylabel("tie fraction (resolved)"); ax[0, 3].set_ylim(-0.02, 1.02)
     ax[1, 0].set_title("Value calibration error\nmean |pred - target|, rolling")
