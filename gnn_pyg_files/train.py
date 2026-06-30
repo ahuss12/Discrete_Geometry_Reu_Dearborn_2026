@@ -115,6 +115,8 @@ def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -
 
 ## reward function module so we can easily switch our reward function
 def reward_function(
+    resolved_reward_type: int,
+    timeout_reward_type: int,
     resolved: bool, 
     t: int, 
     state: CGLGraph, 
@@ -125,18 +127,22 @@ def reward_function(
     baseline_to_go: Optional[list[int,...]] = None, 
     ) -> float:
     if resolved:
-            # reward = float(baseline_to_go[t] - agent_steps_taken + t)/max(max_steps, 1)
-            # reward = float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken,1))
-            # reward = float((baseline_steps_taken - agent_steps_taken)/max(max_steps, 1))
-            reward = float(baseline_steps_taken - agent_steps_taken)
-            # reward = sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t)
-            # reward = float(-agent_steps_taken + t)
+        variants = [
+            lambda: float(baseline_steps_taken - agent_steps_taken), #0 standard
+            lambda: float(-agent_steps_taken + t), #1 all negative reward, no baseline
+            lambda: sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t), #2 log-sum-mult
+            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #3 normalized standard
+            lambda: float(baseline_to_go[t] - agent_steps_taken + t)/max(baseline_steps_taken, 1) #4 potential-shaped per-state standard
+        ]
+        reward = variants[resolved_reward_type]()
+            
     else:
-            # reward = float(baseline_to_go[t] - (agent_steps_taken - t)) / max(max_steps, 1) - timeout_penalty
-            # reward = float(-timeout_penalty)/max(max_steps, 1)
-            # reward = float(- agent_steps_taken + t - baseline_to_go[-1] - timeout_penalty)
-            # reward = -(1 + timeout_penalty/max(baseline_steps_taken,1))
-            reward = -timeout_penalty
+        variants = [
+            lambda: -timeout_penalty, #0 standard
+            lambda: float(-timeout_penalty)/max(baseline_steps_taken, 1), #1 normalized standard
+            lambda: float(baseline_to_go[t] - (agent_steps_taken - t)) / max(baseline_steps_taken, 1) - timeout_penalty #2 normalized and per-state shaped
+        ]
+        reward = variants[timeout_reward_type]()
     return reward
 
 # ===========================================================================================
@@ -160,7 +166,10 @@ def self_play_episode(
     diag: Optional["Diagnostics"] = None, # for logging
     traj: Optional["TrajectoryLogger"] = None, # for logging 
     episode_idx: int = -1, # for logging
-    timeout_multiplier: float = 2.0
+    timeout_multiplier: float = 2.0,
+    early_termination: bool = False,
+    resolved_reward_type: int,
+    timeout_reward_type: int
     ) -> List[CGLGraph]:
     states = []
     policies = []
@@ -194,8 +203,8 @@ def self_play_episode(
             resolved = True
             break
         
-        # if i >= timeout_multiplier * baseline_steps_taken:
-        #     break
+        if early_termination and i >= timeout_multiplier * baseline_steps_taken:
+            break
         
         result = search.run(state, temperature = temperature, add_root_noise = True, reuse_node = reuse_node)        
 
@@ -218,7 +227,16 @@ def self_play_episode(
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        reward = reward_function(resolved, t, state, agent_steps_taken, baseline_steps_taken, timeout_penalty, max_steps, baseline_to_go=baseline_to_go)
+        reward = reward_function(resolved_reward_type, 
+        timeout_reward_type,
+        resolved, 
+        t, 
+        state, 
+        agent_steps_taken, 
+        baseline_steps_taken, 
+        timeout_penalty, 
+        max_steps, 
+        baseline_to_go=baseline_to_go)
         rewards.append(reward)
 
         attach_targets(state, 
@@ -309,16 +327,16 @@ def build_parser() -> argparse.ArgumentParser:
     """All train.py CLI args.  Exposed so sweep.py can discover the full set of
     tunable hyperparameters (names, types, defaults) without drifting out of sync."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--epochs-per-iter", type=int, default=1)
-    parser.add_argument("--mcts-sims", type=int, default=128)
+    parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--timeout-penalty", type=float, default=0.2) ## positive penalty -> negative reward
+    parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
     parser.add_argument("--timeout-multiplier", type=float, default=2.0) ## how many times the baseline are tolerated before the computation times out
     parser.add_argument("--max-steps", type=int, default=40)
-    parser.add_argument("--det-min", type=int, default=12)
-    parser.add_argument("--det-max", type=int, default=12)
+    parser.add_argument("--det-min", type=int, default=2)
+    parser.add_argument("--det-max", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--hidden-dim", type=int, default=128)
@@ -333,9 +351,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
     parser.add_argument("--embedding-size", type=int, default=7)
-    parser.add_argument("--min-dimension", type=int, default=3)
+    parser.add_argument("--min-dimension", type=int, default=2)
     parser.add_argument("--max-dimension", type=int, default=3)
     parser.add_argument("--diag-dir", type=str, default="results")
+    parser.add_argument("--early-termination", action="store_true")
+    parser.add_argument("--resolved-reward-type", type=int,default=0)
+    parser.add_argument("--timeout-reward-type", type=int, default=0)
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -427,7 +448,10 @@ def main() -> None:
             diag=diag,
             traj=traj,
             episode_idx=ep,
-            timeout_multiplier = args.timeout_multiplier
+            timeout_multiplier = args.timeout_multiplier,
+            early_termination=args.early_termination,
+            resolved_reward_type=args.resolved_reward_type,
+            timeout_reward_type=args.timeout_reward_type
         )
 
         replay.extend(examples)
