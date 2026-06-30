@@ -14,8 +14,8 @@ this works for ANY swept train.py argument.  Numeric axes get a value x-axis
 When a config has multiple SEEDS every curve/bar/scalar is the seed mean, curves
 get a +/-1 std band, and scalars get error bars.
 
-  python3 visualizations.py <sweep_run_dir>   # folder holding summary.csv
-  python3 visualizations.py                    # newest run under results/sweep
+  python3 hyp_visualizations.py <sweep_run_dir>   # folder holding summary.csv
+  python3 hyp_visualizations.py                    # newest run under sweep/
 """
 from __future__ import annotations
 import csv, glob, json, os, sys, warnings
@@ -379,7 +379,7 @@ def make_reports(run_dir: str, out_dir: str | None = None) -> list[str]:
 
 
 def main():
-    base = os.path.join(HERE, "results", "sweep")
+    base = os.path.join(HERE, "sweep")
     run_dir = sys.argv[1] if len(sys.argv) > 1 else find_latest_run(base)
     make_reports(run_dir)
 

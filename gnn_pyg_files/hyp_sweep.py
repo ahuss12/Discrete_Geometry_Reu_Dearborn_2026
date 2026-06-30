@@ -9,14 +9,14 @@ train.py default unless you:
 The all-defaults point is the shared BASELINE anchor and is run once.  Every
 config is repeated over --seeds seeds (the reports average over them).
 
-Each invocation writes a fresh timestamped folder results/sweep/<ts>/ holding
-summary.csv, sweep_meta.json, the per-trial subdirs, and the comparison PNGs --
-so repeated sweeps stay separate.  Pass --resume <folder> to continue one.
+Each invocation writes a fresh folder sweep/sweep_<N>/ holding summary.csv,
+sweep_meta.json, the per-trial subdirs, and the comparison PNGs -- so repeated
+sweeps stay separate.  Pass --resume <folder> to continue one.
 
   python3 sweep.py --list                         # every tunable arg + its default
   python3 sweep.py --sweep lr=3e-5,1e-4,3e-4,1e-3 --sweep c_puct=0.5,1,1.5,2 \
                    --set episodes=300 --set device=cpu --seeds 3 --budget-hours 10
-  python3 sweep.py --resume results/sweep/20260629_123456   # continue that run
+  python3 sweep.py --resume sweep/sweep_0          # continue that run
   python3 sweep.py --leaderboard                  # standings of the newest run
 """
 from __future__ import annotations
@@ -28,8 +28,10 @@ import os
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -145,9 +147,14 @@ def run_one(cfg: dict, seed: int, run_dir: str) -> dict:
         else:
             cmd += [_flag(k), str(v)]
 
+    # one core per run: each training job is Python/MCTS-bound (~1 core), so capping
+    # the math-library thread pools keeps N parallel workers from oversubscribing.
+    env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+           "OPENBLAS_NUM_THREADS": "1", "NUMEXPR_NUM_THREADS": "1",
+           "VECLIB_MAXIMUM_THREADS": "1"}
     t0 = time.perf_counter()
     with open(os.path.join(diag_dir, "train.log"), "w") as logf:
-        proc = subprocess.run(cmd, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT)
+        proc = subprocess.run(cmd, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT, env=env)
     row = {"trial": cfg["id"], "seed": seed, "axis": cfg["axis"],
            "elapsed_s": round(time.perf_counter() - t0, 1),
            **{k: params[k] for k in TUNABLE}}
@@ -210,6 +217,14 @@ def analyze(run_dir: str) -> None:
 # ===========================================================================================
 #  RUN-FOLDER HELPERS
 # ===========================================================================================
+def _next_run_dir(outdir: str) -> str:
+    """First unused sweep/sweep_<N> folder (sequential, never reuses an index)."""
+    n = 0
+    while os.path.exists(os.path.join(outdir, f"sweep_{n}")):
+        n += 1
+    return os.path.join(outdir, f"sweep_{n}")
+
+
 def _latest_run(outdir: str) -> str | None:
     subs = [d for d in glob.glob(os.path.join(outdir, "*"))
             if os.path.isdir(d) and os.path.exists(os.path.join(d, "summary.csv"))]
@@ -256,8 +271,11 @@ def main() -> None:
     ap.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
                     help="pin a non-default constant for every run (repeatable)")
     ap.add_argument("--seeds", type=int, default=3, help="seeds per config")
-    ap.add_argument("--outdir", default=os.path.join(HERE, "results", "sweep"),
-                    help="container; each invocation gets its own timestamped subfolder")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="training runs to execute in parallel (each ~1 core; "
+                         f"this machine has {os.cpu_count()} cores)")
+    ap.add_argument("--outdir", default=os.path.join(HERE, "sweep"),
+                    help="container; each invocation gets its own sweep_<N> subfolder")
     ap.add_argument("--resume", default=None, help="continue a previous run folder")
     ap.add_argument("--budget-hours", type=float, default=10.0)
     ap.add_argument("--leaderboard", action="store_true", help="print standings and exit")
@@ -298,7 +316,7 @@ def main() -> None:
             raise SystemExit(f"--resume folder not found: {run_dir}")
         print(f"resuming {run_dir}")
     else:
-        run_dir = os.path.join(args.outdir, time.strftime("%Y%m%d_%H%M%S"))
+        run_dir = _next_run_dir(args.outdir)
         os.makedirs(run_dir, exist_ok=True)
         print(f"new sweep run -> {run_dir}")
     summary_path = os.path.join(run_dir, "summary.csv")
@@ -323,30 +341,58 @@ def main() -> None:
 
     t_start = time.perf_counter()
     budget_s = args.budget_hours * 3600
-    launched = 0
-    for seed in seeds:                                # seeds outermost -> full breadth if cut short
-        for cfg in configs:
-            if (cfg["id"], seed) in done:
-                continue
-            if time.perf_counter() - t_start > budget_s:
-                print(f"\n[budget] {args.budget_hours}h reached -- stopping. "
-                      f"Re-run with --resume {run_dir} to continue.")
-                analyze(run_dir)
-                if not args.no_report:
-                    _write_reports(run_dir)
-                return
-            launched += 1
-            lbl = cfg["axis"]
-            where = f"{lbl}={cfg['params'][lbl]:g}" if lbl != "baseline" and isinstance(cfg["params"][lbl], float) \
-                    else (f"{lbl}={cfg['params'][lbl]}" if lbl != "baseline" else "baseline")
-            print(f"[{launched}] trial {cfg['id']} ({where}) seed {seed}", flush=True)
-            row = run_one(cfg, seed, run_dir)
-            append_summary(summary_path, row)
-            tag = (f"score={row['score']} res={row.get('resolution_rate')} tie={row.get('tie_rate')}"
-                   if row["status"] == "ok" else f"!! {row['status']} (see {row['run_dir']}/train.log)")
-            print(f"     -> {tag}  [{row['elapsed_s']}s]", flush=True)
+    workers = max(1, args.workers)
+    write_lock = threading.Lock()
 
-    print("\nall runs complete.")
+    def _where(cfg: dict) -> str:
+        lbl = cfg["axis"]
+        if lbl == "baseline":
+            return "baseline"
+        v = cfg["params"][lbl]
+        return f"{lbl}={v:g}" if isinstance(v, float) else f"{lbl}={v}"
+
+    # seeds outermost -> breadth-first coverage if the budget cuts us short
+    pending = [(cfg, seed) for seed in seeds for cfg in configs
+               if (cfg["id"], seed) not in done]
+    print(f"running {len(pending)} trials with {workers} parallel worker(s)\n")
+
+    task_iter = iter(pending)
+    inflight: dict = {}
+    launched = completed = 0
+    budget_hit = False
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        while True:
+            while len(inflight) < workers and not budget_hit:    # top up the worker pool
+                if time.perf_counter() - t_start > budget_s:
+                    budget_hit = True
+                    break
+                try:
+                    cfg, seed = next(task_iter)
+                except StopIteration:
+                    break
+                inflight[ex.submit(run_one, cfg, seed, run_dir)] = (cfg, seed)
+                launched += 1
+                print(f"[{launched}/{len(pending)}] -> trial {cfg['id']} "
+                      f"({_where(cfg)}) seed {seed}", flush=True)
+            if not inflight:                                     # nothing left running -> done
+                break
+            for fut in wait(inflight, return_when=FIRST_COMPLETED).done:
+                cfg, seed = inflight.pop(fut)
+                row = fut.result()
+                with write_lock:
+                    append_summary(summary_path, row)
+                completed += 1
+                tag = (f"score={row['score']} res={row.get('resolution_rate')} tie={row.get('tie_rate')}"
+                       if row["status"] == "ok" else f"!! {row['status']} (see {row['run_dir']}/train.log)")
+                print(f"     <- [{completed}/{len(pending)}] trial {cfg['id']} "
+                      f"({_where(cfg)}) seed {seed}: {tag}  [{row['elapsed_s']}s]", flush=True)
+
+    if budget_hit:
+        print(f"\n[budget] {args.budget_hours}h reached -- stopping. "
+              f"Re-run with --resume {run_dir} to continue.")
+    else:
+        print("\nall runs complete.")
     analyze(run_dir)
     if not args.no_report:
         _write_reports(run_dir)

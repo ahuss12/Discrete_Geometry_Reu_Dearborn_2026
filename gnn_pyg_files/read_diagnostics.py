@@ -26,8 +26,12 @@ REPORT PANELS
    9. Value-head calibration       predicted vs target value, colored by episode
   10. Value-head error             per-episode mean |pred - target|, rolling
   11. Raw episode reward           terminal_reward - rays (= -gap when resolved); >0 beats min_sum
-  12. Training loss                total / policy / value, fit-to-replay
-  13. Win / tie / loss (dim>=3)    panel 3 restricted to 3D+ (beating min_sum is impossible in 2D)
+  12. Total training loss          fit-to-replay total = policy + w*value
+  13. Policy loss                  fit-to-replay policy term, on its own axis
+  14. Value loss                   fit-to-replay value term, on its own axis
+  15. Win / tie / loss (dim>=3)    panel 3 restricted to 3D+ (beating min_sum is impossible in 2D)
+  16. Win / tie / loss vs random   panel 3 but vs the random baseline (both-resolved only)
+  17. Agent vs random baseline     gap (agent - random); <0 beats random
   + a hyperparameter strip at the bottom (from config.json / --config / the checkpoint args).
 
 NOTE: agent_rays is censored at max_steps on timed-out episodes, so a timeout's gap is a
@@ -229,7 +233,7 @@ def panel_win_tie_loss_highdim(ax, ep: dict, w: int, min_dim: int = 3) -> None:
     if not xr:
         ax.text(0.5, 0.5, f"no resolved dim≥{min_dim} episodes",
                 ha="center", va="center")
-        ax.set_title(f"13. Win / tie / loss (dim≥{min_dim})"); return
+        ax.set_title(f"15. Win / tie / loss (dim≥{min_dim})"); return
     win  = rolling_mean([1.0 if g < 0 else 0.0 for g in gr], w)
     tie  = rolling_mean([1.0 if g == 0 else 0.0 for g in gr], w)
     loss = rolling_mean([1.0 if g > 0 else 0.0 for g in gr], w)
@@ -238,7 +242,7 @@ def panel_win_tie_loss_highdim(ax, ep: dict, w: int, min_dim: int = 3) -> None:
                  colors=["C2", "C7", "C3"], alpha=0.85)
     ax.set_ylim(0, 1)
     ax.set_xlabel("episode"); ax.set_ylabel("fraction (rolling)")
-    ax.set_title(f"13. Win / tie / loss (dim≥{min_dim} only)\n"
+    ax.set_title(f"15. Win / tie / loss (dim≥{min_dim} only)\n"
                  f"(2D excluded — beating min_sum is impossible there)")
     ax.legend(fontsize=8, loc="lower left")
 
@@ -256,7 +260,7 @@ def panel_win_tie_loss_random(ax, ep: dict, w: int) -> None:
     if not xr:
         ax.text(0.5, 0.5, "no episodes where both\nagent and random resolved",
                 ha="center", va="center")
-        ax.set_title("Win / tie / loss vs random"); return
+        ax.set_title("16. Win / tie / loss vs random"); return
     win  = rolling_mean([1.0 if a < r else 0.0 for a, r in zip(ar, rr)], w)
     tie  = rolling_mean([1.0 if a == r else 0.0 for a, r in zip(ar, rr)], w)
     loss = rolling_mean([1.0 if a > r else 0.0 for a, r in zip(ar, rr)], w)
@@ -265,7 +269,7 @@ def panel_win_tie_loss_random(ax, ep: dict, w: int) -> None:
                  colors=["C2", "C7", "C3"], alpha=0.85)
     ax.set_ylim(0, 1)
     ax.set_xlabel("episode"); ax.set_ylabel("fraction (rolling)")
-    ax.set_title("Win / tie / loss vs random\n(both resolved only)")
+    ax.set_title("16. Win / tie / loss vs random\n(both resolved only)")
     ax.legend(fontsize=8, loc="lower left")
 
 
@@ -430,27 +434,28 @@ def panel_reward(ax, ep: dict, w: int, timeout_penalty: float = 0.0) -> None:
     ax.set_xlabel("episode")
     ax.set_ylabel("episode return  (terminal_reward \u2212 rays)")
     ax.set_title(f"11. Raw episode reward over training\n"
-                 f"(higher better; >0 beats min_sum{pen})")
+                 f"(higher better)")
     ax.legend(fontsize=8, ncol=2)
 
-def panel_train_loss(ax, tl: dict, w: int) -> None:
+def panel_loss_series(ax, tl: dict, w: int, *, key: str, number: int,
+                      label: str, color: str, subtitle: str = "") -> None:
+    """Plot a single training-loss series (total / policy / value) on its own axis."""
     x = tl["episode"]
     if not x:
         ax.text(0.5, 0.5, "no train_loss.csv\n(no training steps logged yet)",
                 ha="center", va="center")
-        ax.set_title("12. Training loss"); return
-    series = [("loss", "total", "C0"),
-              ("policy_loss", "policy", "C1"),
-              ("value_loss", "value", "C3")]
-    for key, label, color in series:
-        y = tl[key]
-        # ax.scatter(x, y, s=8, alpha=0.2, color=color)
-        ax.plot(x, rolling_mean(y, w), color=color, lw=2, label=label)
+        ax.set_title(f"{number}. {label}"); return
+    y = tl[key]
+    ax.scatter(x, y, s=8, alpha=0.15, color=color)
+    ax.plot(x, rolling_mean(y, w), color=color, lw=2, label=f"rolling mean (w={w})")
     # log-y only if every value is strictly positive (a logged 0.0 means a dead loss)
-    if all(v > 0 for k in ("loss", "policy_loss", "value_loss") for v in tl[k]):
+    if all(v > 0 for v in y):
         ax.set_yscale("log")
     ax.set_xlabel("episode"); ax.set_ylabel("loss (mean over epochs_per_iter)")
-    ax.set_title("12. Training loss over training\n(fit-to-replay; total = policy + w\u00b7value)")
+    title = f"{number}. {label} over training"
+    if subtitle:
+        title += f"\n{subtitle}"
+    ax.set_title(title)
     ax.legend(fontsize=8)
 
 def panel_random_comparison(ax, ep: dict, w: int) -> None:
@@ -477,7 +482,7 @@ def panel_random_comparison(ax, ep: dict, w: int) -> None:
                    alpha=0.5, label="timed out")
     ax.set_xlabel("episode")
     ax.set_ylabel("gap (agent \u2212 random)")
-    ax.set_title("Agent vs random baseline\n(lower better, <0 beats random)")
+    ax.set_title("17. Agent vs random baseline\n(lower better, <0 beats random)")
     ax.legend(fontsize=8)
 
 # ===========================================================================================
@@ -652,42 +657,48 @@ def main() -> None:
     w = max(1, min(args.rolling, n_ep))
     cfg = load_config(args.directory, args.config, args.checkpoint)
 
-    # 4x3 panel grid + 1 wide extra row + config strip
-    fig = plt.figure(figsize=(18, 22))
-    gs = fig.add_gridspec(6, 3, height_ratios=[1, 1, 1, 1, 1, 0.42], hspace=0.5, wspace=0.25)
-    axes = np.empty((4, 3), dtype=object)
-    for r in range(4):
+    # 6x3 panel grid + config strip
+    fig = plt.figure(figsize=(18, 26))
+    gs = fig.add_gridspec(7, 3, height_ratios=[1, 1, 1, 1, 1, 1, 0.42],
+                          hspace=0.5, wspace=0.25)
+    axes = np.empty((6, 3), dtype=object)
+    for r in range(6):
         for c in range(3):
             axes[r, c] = fig.add_subplot(gs[r, c])
 
-    panel_gap_curve(axes[0, 0], ep, w)
-    panel_resolution(axes[0, 1], ep, w)
-    panel_win_tie_loss(axes[0, 2], ep, w)
-    panel_parity(axes[1, 0], ep)
-    n_res, dropped = panel_gap_vs_mult(axes[1, 1], ep)
-    panel_resolution_vs_mult(axes[1, 2], ep)
-    panel_resolution_vs_dim(axes[2, 0], ep)
-    panel_gap_hist(axes[2, 1], ep)
-    panel_calibration(axes[2, 2], cal)
-    panel_value_error(axes[3, 0], cal, w)
+    panel_gap_curve(axes[0, 0], ep, w)                       # 1
+    panel_resolution(axes[0, 1], ep, w)                      # 2
+    panel_win_tie_loss(axes[0, 2], ep, w)                    # 3
+    panel_parity(axes[1, 0], ep)                             # 4
+    n_res, dropped = panel_gap_vs_mult(axes[1, 1], ep)       # 5
+    panel_resolution_vs_mult(axes[1, 2], ep)                 # 6
+    panel_resolution_vs_dim(axes[2, 0], ep)                  # 7
+    panel_gap_hist(axes[2, 1], ep)                           # 8
+    panel_calibration(axes[2, 2], cal)                       # 9
+    panel_value_error(axes[3, 0], cal, w)                    # 10
 
     timeout_penalty = float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0
-    panel_reward(axes[3, 1], ep, w, timeout_penalty=timeout_penalty)  # panel 10
+    panel_reward(axes[3, 1], ep, w, timeout_penalty=timeout_penalty)  # 11
 
-    panel_train_loss(axes[3, 2], tl, w)  # panel 11
+    # training loss split onto three separate charts (total / policy / value)
+    panel_loss_series(axes[3, 2], tl, w, key="loss", number=12,
+                      label="Total training loss", color="C0",
+                      subtitle="(fit-to-replay; total = policy + w·value)")  # 12
+    panel_loss_series(axes[4, 0], tl, w, key="policy_loss", number=13,
+                      label="Policy loss", color="C1")                       # 13
+    panel_loss_series(axes[4, 1], tl, w, key="value_loss", number=14,
+                      label="Value loss", color="C3")                        # 14
 
-    ax_highdim = fig.add_subplot(gs[4, 0])
-    panel_win_tie_loss_highdim(ax_highdim, ep, w)
-    ax_wtl_random = fig.add_subplot(gs[4, 1])
-    panel_win_tie_loss_random(ax_wtl_random, ep, w)
-    ax_random = fig.add_subplot(gs[4, 2])
-    panel_random_comparison(ax_random, ep, w)
+    panel_win_tie_loss_highdim(axes[4, 2], ep, w)            # 15
+    panel_win_tie_loss_random(axes[5, 0], ep, w)            # 16
+    panel_random_comparison(axes[5, 1], ep, w)              # 17
+    axes[5, 2].axis("off")                                   # unused slot
 
-    cfg_ax = fig.add_subplot(gs[5, :2])
+    cfg_ax = fig.add_subplot(gs[6, :2])
     render_config(cfg_ax, cfg)
 
     # note lives in its own box directly to the right of the hyperparameters
-    note_ax = fig.add_subplot(gs[5, 2])
+    note_ax = fig.add_subplot(gs[6, 2])
     render_note(note_ax, args.note)
 
     res_rate = sum(ep["resolved"]) / n_ep
@@ -747,7 +758,13 @@ def main() -> None:
             ("value_error", lambda a: panel_value_error(a, cal, w)),
             ("reward", lambda a: panel_reward(
                 a, ep, w, float(cfg.get("timeout_penalty", 0.0)) if cfg else 0.0)),
-            ("train_loss", lambda a: panel_train_loss(a, tl, w)),
+            ("total_loss", lambda a: panel_loss_series(
+                a, tl, w, key="loss", number=12, label="Total training loss", color="C0",
+                subtitle="(fit-to-replay; total = policy + w·value)")),
+            ("policy_loss", lambda a: panel_loss_series(
+                a, tl, w, key="policy_loss", number=13, label="Policy loss", color="C1")),
+            ("value_loss", lambda a: panel_loss_series(
+                a, tl, w, key="value_loss", number=14, label="Value loss", color="C3")),
             ("win_tie_loss_random", lambda a: panel_win_tie_loss_random(a, ep, w)),
             ("random_comparison", lambda a: panel_random_comparison(a, ep, w)),
             ("initial_mult", lambda a: panel_mult_hist(a, ep)),
