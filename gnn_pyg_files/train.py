@@ -419,6 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--early-termination", action="store_true")
     parser.add_argument("--resolved-reward-type", type=int,default=0)
     parser.add_argument("--timeout-reward-type", type=int, default=0)
+    parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GAT")
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -448,6 +449,7 @@ def main() -> None:
         embedding_size=args.embedding_size,
         num_layers=args.num_blocks,
         dropout=args.dropout,
+        layer_type=args.layer_type
     ).to(device)
 
     meta_state = meta_state.to(device)

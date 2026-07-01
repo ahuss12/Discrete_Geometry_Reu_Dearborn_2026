@@ -1,0 +1,20 @@
+43 models  x  1305 cones  (n<=4, 2<=d<=30)  cap=80  workers=12
+  [1/43] t000_s2 emb=7 res=0.976 gap=6.08 score=6.19
+  [2/43] t000_s6 emb=7 res=0.975 gap=6.20 score=6.33
+  [3/43] t001_s2 emb=16 res=0.962 gap=6.20 score=6.39
+  [4/43] t000_s1 emb=7 res=0.962 gap=7.00 score=7.19
+  [5/43] t001_s0 emb=16 res=0.952 gap=6.78 score=7.02
+  [6/43] t001_s1 emb=16 res=0.945 gap=6.67 score=6.94
+  [7/43] t000_s7 emb=7 res=0.925 gap=6.88 score=7.25
+  [8/43] t000_s0 emb=7 res=0.933 gap=7.38 score=7.71
+  [9/43] t000_s3 emb=7 res=0.925 gap=7.44 score=7.81
+  [10/43] t000_s5 emb=7 res=0.935 gap=7.59 score=7.92
+  [11/43] t000_s4 emb=7 res=0.917 gap=7.26 score=7.67
+  [12/43] t001_s3 emb=16 res=0.916 gap=8.03 score=8.45
+  [13/43] t001_s4 emb=16 res=0.952 gap=6.26 score=6.51
+  [14/43] t002_s0 emb=32 res=0.955 gap=6.73 score=6.96
+  [15/43] t002_s5 emb=32 res=0.974 gap=5.87 score=6.00
+  [16/43] t002_s3 emb=32 res=0.963 gap=5.67 score=5.85
+  [17/43] t002_s2 emb=32 res=0.946 gap=6.20 score=6.47
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-56se6q0a', '/mp-lgw3tt1y', '/mp-28pzq72j', '/mp-x_tvt6qw', '/mp-vc5u3954'}
+  warnings.warn(
