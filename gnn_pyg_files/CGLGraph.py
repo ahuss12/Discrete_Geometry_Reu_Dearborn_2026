@@ -65,7 +65,7 @@ class CGLGraph(HeteroData):
         self['lattice'].x   = torch.empty((0, self._dimension), dtype=torch.float)
 
         ## virtual node: single featureless node, always index 0
-        self['virtual'].x = torch.zeros((1, 0), dtype=torch.float)
+        self['virtual'].x = torch.ones((1, dimension), dtype=torch.float)
 
         self['cone',      'has',        'generator'].edge_index = torch.empty((2, 0), dtype=torch.long)
         self['generator', 'of',         'cone'     ].edge_index = torch.empty((2, 0), dtype=torch.long)
