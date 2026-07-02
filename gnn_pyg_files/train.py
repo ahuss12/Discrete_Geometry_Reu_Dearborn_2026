@@ -182,6 +182,7 @@ def reward_function(
             lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #1 normalized by baseline
             lambda: float(-agent_steps_taken), #2 all negative
             lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult, #3 alperen's suggestion
+            lambda: float(root_mult - agent_steps_taken)/root_mult #4 dummy reward
         ]
         reward = variants[reward_type]()
             
@@ -190,7 +191,8 @@ def reward_function(
             lambda: -timeout_penalty, #0 standard
             lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)) - timeout_penalty, #1 normalized by baseline
             lambda: -timeout_penalty,#2 all negative
-            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult - timeout_penalty #3 alperen's suggestion
+            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult - timeout_penalty, #3 alperen's suggestion
+            lambda: float(root_mult - agent_steps_taken)/root_mult - timeout_penalty #4 dummy reward
         ]
         reward = variants[reward_type]()
     return reward
