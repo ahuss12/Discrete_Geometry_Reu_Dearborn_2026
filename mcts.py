@@ -145,8 +145,7 @@ class MCTS:
 
         if reuse_node is not None:
             # Reusing a node whose Q-values were produced with a different root
-            # normalization can be inconsistent.  Training currently passes None,
-            # but we keep the API and continue from the provided node if requested.
+            # normalization can be inconsistent.  Training currently passes None
             root = reuse_node
         else:
             root = MCTSNode(state=root_state)
