@@ -10,11 +10,11 @@ from torch_geometric.nn import HeteroConv, GATv2Conv, GraphConv
 from torch_geometric.utils import softmax
 
 
-EMBEDDING_SIZE = 7 ## default embedding length
+EMBEDDING_SIZE = 64 ## default embedding length
 
 ## Our GNN uses GATv2Conv layers + GeLU activation. 
 class GAT(nn.Module):
-    def __init__(self, hidden_channels: int = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
+    def __init__(self, hidden_channels: int = 128, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.05):
         super().__init__()
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
@@ -57,8 +57,8 @@ class GAT(nn.Module):
         return x_dict
 
 ## GraphConv GNN for A/B testing
-class Graph(nn.Module): 
-    def __init__(self, hidden_channels: int = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
+class Graph(nn.Module):
+    def __init__(self, hidden_channels: int = 128, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.05):
         super().__init__()
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
@@ -132,7 +132,7 @@ class policyHead(nn.Module):
         return self.fc2(x).squeeze(-1)
 
 class network(nn.Module):
-    def __init__(self, metadata, hidden: int = 64, embedding_size: int = EMBEDDING_SIZE, num_layers: int = 4, dropout: float = 0.1, layer_type: str = "GAT"):
+    def __init__(self, metadata, hidden: int = 128, embedding_size: int = EMBEDDING_SIZE, num_layers: int = 4, dropout: float = 0.05, layer_type: str = "GraphConv"):
         super().__init__()
         if layer_type == "GAT":
             self.gnn = GAT(hidden_channels = hidden, out_channels = embedding_size, num_layers = num_layers, dropout = dropout)
@@ -181,7 +181,7 @@ def main():
     meta = graph.metadata()
     print("node types:", meta[0])          # expect ['cone','lattice','global']
 
-    net = network(meta, hidden=64, embedding_size=EMBEDDING_SIZE, num_layers=4)
+    net = network(meta, hidden=128, embedding_size=EMBEDDING_SIZE, num_layers=4)
     net(graph)
     net.eval()
 

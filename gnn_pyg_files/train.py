@@ -410,13 +410,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
-    parser.add_argument("--embedding-size", type=int, default=7)
+    parser.add_argument("--embedding-size", type=int, default=64)
     parser.add_argument("--min-dimension", type=int, default=2)
-    parser.add_argument("--max-dimension", type=int, default=3)
+    parser.add_argument("--max-dimension", type=int, default=4)
     parser.add_argument("--diag-dir", type=str, default="results")
     parser.add_argument("--early-termination", action="store_true")
     parser.add_argument("--reward-type", type=int,default=0)
-    parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GAT")
+    parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GraphConv")
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
