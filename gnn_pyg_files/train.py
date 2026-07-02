@@ -164,8 +164,7 @@ def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -
 
 ## reward function module so we can easily switch our reward function
 def reward_function(
-    resolved_reward_type: int,
-    timeout_reward_type: int,
+    reward_type: int,
     resolved: bool, 
     t: int, 
     state: CGLGraph, 
@@ -173,29 +172,27 @@ def reward_function(
     baseline_steps_taken: int, 
     timeout_penalty: float,
     max_steps: int,
+    root_mult: int,
     baseline_left: int,
     baseline_to_go: Optional[list[int,...]] = None, 
     ) -> float:
     if resolved:
         variants = [
             lambda: float(baseline_steps_taken - agent_steps_taken), #0 standard
-            lambda: float(-agent_steps_taken + t), #1 all negative reward, no baseline
-            lambda: sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t), #2 log-sum-mult
-            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #3 normalized standard
-            lambda: float(baseline_to_go[t] - agent_steps_taken + t)/max(baseline_steps_taken, 1), #4 potential-shaped per-state standard
-            lambda: 1.0 + float(np.clip((baseline_to_go[t] - agent_steps_taken + t) / max(baseline_steps_taken, 1), -1.0, 1.0)), #5 possible fix to #4. Makes resolution always look good
-            lambda: float(-agent_steps_taken)
+            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #1 normalized by baseline
+            lambda: float(-agent_steps_taken), #2 all negative
+            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult, #3 alperen's suggestion
         ]
-        reward = variants[resolved_reward_type]()
+        reward = variants[reward_type]()
             
     else:
         variants = [
             lambda: -timeout_penalty, #0 standard
-            lambda: float(-timeout_penalty)/max(baseline_steps_taken, 1), #1 normalized standard
-            lambda: float(baseline_to_go[t] - (agent_steps_taken - t)) / max(baseline_steps_taken, 1) - timeout_penalty, #2 normalized and per-state shaped
-            lambda: -float(np.clip((agent_steps_taken - t + baseline_left) / max(baseline_steps_taken, 1), 0.0, 2.0)) - timeout_penalty, #3 clipped and normalized
+            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)) - timeout_penalty, #1 normalized by baseline
+            lambda: -timeout_penalty,#2 all negative
+            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult - timeout_penalty #3 alperen's suggestion
         ]
-        reward = variants[timeout_reward_type]()
+        reward = variants[reward_type]()
     return reward
 
 # ===========================================================================================
@@ -221,8 +218,7 @@ def self_play_episode(
     episode_idx: int = -1, # for logging
     timeout_multiplier: float = 2.0,
     early_termination: bool = False,
-    resolved_reward_type: int,
-    timeout_reward_type: int
+    reward_type: int
     ) -> List[CGLGraph]:
     states = []
     policies = []
@@ -274,11 +270,13 @@ def self_play_episode(
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
 
-    if resolved: 
-        baseline_left = 0 
+    if resolved:
+        baseline_left = 0
     else:
         baseline_left,_ ,_ = min_sum(state)
-        
+
+    ## capture the terminal fan now
+    final_fan = [c.rays for c in state._cone_objects.values()]
     
     examples: List[HeteroData] = []
     agent_steps_taken = len(states) 
@@ -286,8 +284,8 @@ def self_play_episode(
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        reward = reward_function(resolved_reward_type, 
-        timeout_reward_type,
+        reward = reward_function(
+        reward_type,
         resolved, 
         t, 
         state, 
@@ -295,6 +293,7 @@ def self_play_episode(
         baseline_steps_taken, 
         timeout_penalty, 
         max_steps, 
+        root_mult=root_mult,
         baseline_left=baseline_left,
         baseline_to_go=baseline_to_go)
         rewards.append(reward)
@@ -310,7 +309,6 @@ def self_play_episode(
 
     # log cone subdivision trajectory (agent's action choices)
     if traj is not None:
-        final_fan = [c.rays for c in state._cone_objects.values()]
         traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
                  final_fan=final_fan, resolved=resolved, agent_rays=agent_steps_taken, 
                  baseline_rays=baseline_steps_taken, baseline_points=baseline_actions,                     
@@ -417,8 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-dimension", type=int, default=3)
     parser.add_argument("--diag-dir", type=str, default="results")
     parser.add_argument("--early-termination", action="store_true")
-    parser.add_argument("--resolved-reward-type", type=int,default=0)
-    parser.add_argument("--timeout-reward-type", type=int, default=0)
+    parser.add_argument("--reward-type", type=int,default=0)
     parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GAT")
 
     # old experiment controls.
@@ -517,8 +514,7 @@ def main() -> None:
             episode_idx=ep,
             timeout_multiplier = args.timeout_multiplier,
             early_termination=args.early_termination,
-            resolved_reward_type=args.resolved_reward_type,
-            timeout_reward_type=args.timeout_reward_type
+            reward_type = args.reward_type
         )
 
         replay.extend(examples)

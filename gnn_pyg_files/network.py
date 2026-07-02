@@ -14,7 +14,7 @@ EMBEDDING_SIZE = 7 ## default embedding length
 
 ## Our GNN uses GATv2Conv layers + GeLU activation. 
 class GAT(nn.Module):
-    def __init__(self, hidden_channels = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
+    def __init__(self, hidden_channels: int = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
         super().__init__()
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
@@ -24,7 +24,7 @@ class GAT(nn.Module):
             out_num = hidden_channels
             has_residual = True
             if i == 0: has_residual = False
-            if i == num_layers - 1: 
+            if i == num_layers - 1:
                 out_num = out_channels
                 has_residual = False
 
@@ -58,7 +58,7 @@ class GAT(nn.Module):
 
 ## GraphConv GNN for A/B testing
 class Graph(nn.Module): 
-    def __init__(self, hidden_channels = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
+    def __init__(self, hidden_channels: int = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
         super().__init__()
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
@@ -67,7 +67,6 @@ class Graph(nn.Module):
         for i in range(num_layers):
             in_num = (-1, -1)
             out_num = hidden_channels
-
             if i == num_layers - 1: out_num = out_channels
 
             conv = HeteroConv({

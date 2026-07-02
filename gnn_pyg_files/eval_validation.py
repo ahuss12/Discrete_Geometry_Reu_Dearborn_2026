@@ -19,9 +19,10 @@ Parameters:
   --d-max D          keep only depot cones with determinant d <= D      (default 30)
   --max-steps K      max greedy subdivisions per cone before it counts
                      as unresolved                                      (default 80)
-  --group-by AXIS    axis to compare models across: embedding_size | layer_type
-                     (default: auto-detect the sweep's varied axis from
-                     sweep_meta.json, else embedding_size)
+  --group-by HPARAM  any train.py hyperparameter to compare models across (lr,
+                     c_puct, layer_type, ...). Default: auto-detect the sweep's
+                     varied axis from sweep_meta.json, else the arg that varies
+                     across the evaluated models.
   --workers W        parallel model-evaluation processes                (default 12)
   --out PATH         output PNG path (records.json/CSV derived from it)
                      (default: <sweep-dir>/validation_eval.png)
@@ -52,23 +53,51 @@ def load_depot(n_max, d_min, d_max):
     return [c for c in depot if c["n"] <= n_max and d_min <= c["d"] <= d_max]
 
 
-# per-model fields we can group the comparison plots by
-GROUPABLE = ("embedding_size", "layer_type")
+# per-run identity / environment fields -- never used as a grouping axis
+_NONGROUP = {"save", "diag_dir", "resume", "device", "seed"}
+
+
+def group_value(m, key):
+    """The value of hyperparameter `key` for one evaluated model, read from its
+    stored train.py args (falling back to the top-level record for the legacy
+    embedding_size / layer_type / seed fields)."""
+    args = m.get("args") or {}
+    return args[key] if key in args else m.get(key)
+
+
+def infer_group_key(models):
+    """Pick a grouping axis from the models themselves: the train.py arg that
+    actually varies across the evaluated models, preferring the one with the most
+    distinct values (ties broken alphabetically).  None if nothing varies."""
+    args = [m.get("args", {}) for m in models if m.get("args")]
+    if not args:
+        return None
+    keys = set.intersection(*(set(a) for a in args)) - _NONGROUP
+    varying = [(len({a[k] for a in args}), k) for k in keys
+               if len({a[k] for a in args}) > 1]
+    if not varying:
+        return None
+    varying.sort(key=lambda t: (-t[0], t[1]))
+    return varying[0][1]
+
 
 def detect_group_key(sweep_dir):
-    """Pick the axis to compare across: the sweep's own varied axis if we can plot
-    it (from sweep_meta.json), else embedding_size."""
+    """Grouping axis for the comparison plots, from sweep_meta.json: the sweep's
+    varied axis (or the first, if a grid varied several).  None when there is no
+    meta file, so the caller infers it from the evaluated models instead."""
     try:
         axes = json.load(open(os.path.join(sweep_dir, "sweep_meta.json"))).get("axes", [])
-        if len(axes) == 1 and axes[0] in GROUPABLE:
+        if axes:
             return axes[0]
     except (OSError, ValueError):
         pass
-    return "embedding_size"
+    return None
 
 
-def eval_one_model(model_path, cones, max_steps):
-    """Runs in a worker process: load model, greedy-rollout every cone."""
+def eval_one_model(model_path, cones, max_steps, progress=False):
+    """Runs in a worker process: load model, greedy-rollout every cone.
+    progress=True shows a live per-cone bar (single-model mode only; the sweep
+    grid runs many workers in parallel and would interleave bars)."""
     import torch
     from Cone import Cone
     from CGLGraph import CGLGraph
@@ -115,9 +144,17 @@ def eval_one_model(model_path, cones, max_steps):
         return steps, g.isDecomposed()
 
     recs = []
-    for c in cones:
+    n_res = n_tie = fwd = 0
+    bar = tqdm(cones, desc=os.path.basename(os.path.dirname(model_path)),
+               unit="cone", disable=not progress)
+    for c in bar:
         s, r = rollout(c)
         recs.append((c["n"], c["d"], c["min_sum_steps"], s, int(r)))
+        if progress:
+            n_res += r; n_tie += int(r and s == c["min_sum_steps"]); fwd += s
+            bar.set_postfix(n=c["n"], d=c["d"], forwards=fwd,
+                            res=f"{n_res/len(recs):.0%}",
+                            tie=f"{n_tie/max(n_res,1):.0%}", refresh=False)
     return {"path": model_path, "embedding_size": a["embedding_size"],
             "layer_type": a.get("layer_type", "GAT"),
             "seed": a.get("seed", -1), "args": dict(a), "records": recs}
@@ -137,16 +174,13 @@ def summarize(res):
     return dict(res_rate=res_rate, mean_gap=mean_gap, tie=tie, beat=beat, score=score)
 
 
-# args fields that vary by design or are per-run identity, not "constant hyperparameters"
-_HPARAM_SKIP = {"save", "diag_dir", "resume", "device", "seed"}
-
 def constant_hparams(models, group_key):
     """Hyperparameters held fixed across every evaluated model (same value everywhere),
     excluding per-run identity fields and the swept axis itself."""
     args = [m.get("args", {}) for m in models if m.get("args")]
     if not args:
         return {}
-    skip = _HPARAM_SKIP | {group_key}
+    skip = _NONGROUP | {group_key}
     keys = set.intersection(*(set(a) for a in args))
     consts = {}
     for k in sorted(keys):
@@ -168,10 +202,14 @@ def make_png(models, out_png, meta):
     gkey = meta.get("group_key", "embedding_size")     # which swept axis to compare across
     by_grp = defaultdict(list)
     for m in models:
-        by_grp[m.get(gkey, m.get("embedding_size"))].append(m)
-    # numeric axes (embedding_size) sort/scale numerically; categorical (layer_type) don't
-    groups = sorted(by_grp, key=lambda g: (not isinstance(g, (int, float)), g))
-    numeric = all(isinstance(g, (int, float)) for g in groups)
+        v = group_value(m, gkey)
+        by_grp["n/a" if v is None else v].append(m)
+    # numeric axes (lr, embedding_size, ...) sort/scale numerically; categorical
+    # (layer_type) and booleans (early_termination) are treated as discrete labels
+    def _numeric(g):
+        return isinstance(g, (int, float)) and not isinstance(g, bool)
+    groups = sorted(by_grp, key=lambda g: (not _numeric(g), g if _numeric(g) else str(g)))
+    numeric = all(_numeric(g) for g in groups)
     xpos = {g: (g if numeric else i) for i, g in enumerate(groups)}
     palette = plt.cm.viridis(np.linspace(0, 1, len(groups)))
     color = {g: palette[i] for i, g in enumerate(groups)}
@@ -487,14 +525,22 @@ def run_detail(args):
     detail_records = os.path.splitext(out_png)[0] + "_records.json"
     sweep_records = os.path.join(args.sweep_dir, "validation_eval_records.json")
 
-    # prefer a per-model detail records file, then the sweep-level one
+    # prefer a per-model detail records file, then the sweep-level one.
+    # stored records are only reusable if they were rolled out under the same
+    # cone filter; --replot skips the check and takes whatever is stored.
+    want = dict(n_max=args.n_max, d_min=args.d_min, d_max=args.d_max,
+                max_steps=args.max_steps)
     found = None
     for rp in (detail_records, sweep_records):
         hit = find_model_record(rp, model_path)
         if hit:
-            found = hit
-            print(f"reusing stored records from {rp}")
-            break
+            meta_stored = hit[0]
+            if args.replot or all(meta_stored.get(k) == v for k, v in want.items()):
+                found = hit
+                print(f"reusing stored records from {rp}")
+                break
+            print(f"stored records in {rp} used a different filter "
+                  f"({ {k: meta_stored.get(k) for k in want} } vs {want}); re-rolling")
 
     if found:
         meta, model = found
@@ -505,7 +551,7 @@ def run_detail(args):
         cones = load_depot(args.n_max, args.d_min, args.d_max)
         print(f"rolling out {os.path.basename(os.path.dirname(model_path))} on "
               f"{len(cones)} cones (n≤{args.n_max}, {args.d_min}≤d≤{args.d_max}) ...")
-        model = eval_one_model(model_path, cones, args.max_steps)
+        model = eval_one_model(model_path, cones, args.max_steps, progress=True)
         if "error" in model:
             print(f"eval failed: {model['error']}"); return
         meta = dict(n_max=args.n_max, d_min=args.d_min, d_max=args.d_max,
@@ -529,8 +575,10 @@ def main():
                     help="keep only depot cones with determinant d <= this")
     ap.add_argument("--max-steps", type=int, default=80,
                     help="max greedy subdivisions per cone before it counts as unresolved")
-    ap.add_argument("--group-by", choices=GROUPABLE, default=None,
-                    help="axis to compare models across (default: auto-detect the sweep's varied axis)")
+    ap.add_argument("--group-by", default=None, metavar="HPARAM",
+                    help="any train.py hyperparameter to compare models across, e.g. lr, "
+                         "c_puct, layer_type (default: auto-detect the sweep's varied axis "
+                         "from sweep_meta.json, else the arg that varies across the models)")
     ap.add_argument("--workers", type=int, default=12,
                     help="parallel model-evaluation processes")
     ap.add_argument("--out", default=None,
@@ -552,18 +600,19 @@ def main():
 
     if args.replot:
         blob = json.load(open(records_path))
-        models = [{"path": m["path"], "embedding_size": m["embedding_size"],
-                   "layer_type": m.get("layer_type", "GAT"),
-                   "seed": m["seed"], "records": [tuple(r) for r in m["records"]]}
-                  for m in blob["models"]]
-        make_png(models, out_png, blob["meta"])
+        # keep every stored field (incl. args) so grouping can use any hyperparameter
+        models = [{**m, "records": [tuple(r) for r in m["records"]]} for m in blob["models"]]
+        meta = blob["meta"]
+        if args.group_by:                          # let --replot re-group on a new axis
+            meta = {**meta, "group_key": args.group_by,
+                    "constants": constant_hparams(models, args.group_by)}
+        make_png(models, out_png, meta)
         print(f"replotted from {records_path}")
         return
 
     group_key = args.group_by or detect_group_key(args.sweep_dir)
     cones = load_depot(args.n_max, args.d_min, args.d_max)
     model_paths = sorted(glob.glob(os.path.join(args.sweep_dir, "t*", "model.pt")))
-    print(f"grouping comparison by: {group_key}")
     print(f"{len(model_paths)} models  x  {len(cones)} cones  "
           f"(n<={args.n_max}, {args.d_min}<=d<={args.d_max})  "
           f"max_steps={args.max_steps}  workers={args.workers}")
@@ -585,6 +634,10 @@ def main():
 
     if not models:
         print("no models evaluated; aborting."); return
+    # resolve the grouping axis now that the models (and their args) are loaded
+    if group_key is None:
+        group_key = infer_group_key(models) or "embedding_size"
+    print(f"grouping comparison by: {group_key}")
     meta = dict(n_max=args.n_max, d_min=args.d_min, d_max=args.d_max,
                 n_cones=len(cones), n_models=len(models), group_key=group_key,
                 max_steps=args.max_steps,
@@ -597,14 +650,23 @@ def main():
 
     make_png(models, out_png, meta)
 
-    # also dump raw per-model metrics next to the png
+    # also dump raw per-model metrics next to the png. include the grouping axis
+    # as its own column (unless it is already one of the fixed identity columns).
+    extra = [] if group_key in ("embedding_size", "layer_type", "seed") else [group_key]
     with open(os.path.splitext(out_png)[0] + ".csv", "w") as f:
-        f.write("trial_dir,embedding_size,layer_type,seed,res_rate,mean_gap,tie,beat,score\n")
-        for m in sorted(models, key=lambda x: (x["embedding_size"], x["layer_type"], x["seed"])):
+        f.write(",".join(["trial_dir", *extra, "embedding_size", "layer_type",
+                          "seed", "res_rate", "mean_gap", "tie", "beat", "score"]) + "\n")
+        gv = lambda m: group_value(m, group_key)
+        for m in sorted(models, key=lambda x: (str(gv(x)), x["embedding_size"],
+                                               x["layer_type"], x["seed"])):
             s = summarize(m)
-            f.write(f"{os.path.basename(os.path.dirname(m['path']))},{m['embedding_size']},"
-                    f"{m['layer_type']},{m['seed']},"
-                    f"{s['res_rate']:.4f},{s['mean_gap']:.4f},{s['tie']:.4f},{s['beat']:.4f},{s['score']:.4f}\n")
+            cells = [os.path.basename(os.path.dirname(m["path"]))]
+            if extra:
+                cells.append(str(gv(m)))
+            cells += [str(m["embedding_size"]), str(m["layer_type"]), str(m["seed"]),
+                      f"{s['res_rate']:.4f}", f"{s['mean_gap']:.4f}",
+                      f"{s['tie']:.4f}", f"{s['beat']:.4f}", f"{s['score']:.4f}"]
+            f.write(",".join(cells) + "\n")
     print(f"wrote {os.path.splitext(out_png)[0] + '.csv'}")
 
 
