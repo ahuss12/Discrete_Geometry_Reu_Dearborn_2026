@@ -2,9 +2,8 @@ from __future__ import annotations
 
 """Baseline heuristics used by training and MCTS.
 
-The important function is ``min_sum_steps`` / ``min_sum``.  We keep it outside
+The important function is ``min_sum_steps`` / ``min_sum`` for reward potentiral its outside
 ``train.py`` so MCTS can use the same baseline-to-go potential without importing
-``train.py`` and creating a circular dependency.
 """
 
 import random
