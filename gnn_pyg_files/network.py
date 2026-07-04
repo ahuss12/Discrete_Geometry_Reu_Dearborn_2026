@@ -12,7 +12,7 @@ from torch_geometric.utils import softmax
 
 EMBEDDING_SIZE = 64 ## default embedding length
 
-## Our GNN uses GATv2Conv layers + GeLU activation. 
+## Our GNN uses GATv2Conv layers + ReLU activation. 
 class GAT(nn.Module):
     def __init__(self, hidden_channels: int = 128, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.05):
         super().__init__()
@@ -53,7 +53,7 @@ class GAT(nn.Module):
         for i, conv in enumerate(self.convs):
             x_dict = conv(x_dict, edge_index_dict, edge_attr_dict = edge_attr_dict)
             if i < len(self.convs) - 1:
-                x_dict = {k: F.gelu(self.norms[i](v)) for k, v in x_dict.items()}
+                x_dict = {k: F.relu(self.norms[i](v)) for k, v in x_dict.items()}
         return x_dict
 
 ## GraphConv GNN for A/B testing
@@ -87,14 +87,14 @@ class Graph(nn.Module):
             residual = x_dict
             x_dict = conv(x_dict, edge_index_dict, edge_weight_dict)
             if i < len(self.convs) - 1:
-                x_dict = {k: self.dropouts[i](F.gelu(self.norms[i](v))) for k, v in x_dict.items()}
+                x_dict = {k: self.dropouts[i](F.relu(self.norms[i](v))) for k, v in x_dict.items()}
                 if i != 0:
                     x_dict = {k: v + residual[k] for k, v in x_dict.items()}
         return x_dict
 
 class valueHead(nn.Module): 
     """ Takes in the graph-level embedding vector and outputs a learned scalar valuation. 
-    LayerNorm -> FC Layer -> GeLU -> FC Layer -> Scalar Output
+    LayerNorm -> FC Layer -> ReLU -> FC Layer -> Scalar Output
 
     Shape: 
      - g: (EMBEDDING_SIZE,) graph-level embedding vector
@@ -110,7 +110,7 @@ class valueHead(nn.Module):
 
     def forward(self, g):
         g = self.norm(g)
-        g = F.gelu(self.fc1(g))
+        g = F.relu(self.fc1(g))
         g = self.fc2(g)
         return g.squeeze(-1)
 
@@ -128,7 +128,7 @@ class policyHead(nn.Module):
     def forward(self, Z, g):        
         x = torch.cat([Z, g], dim = -1)
         x = self.norm(x)
-        x = F.gelu(self.fc1(x))
+        x = F.relu(self.fc1(x))
         return self.fc2(x).squeeze(-1)
 
 class network(nn.Module):

@@ -12,6 +12,7 @@ gnn_pyg_files/sweep.out
 gnn_pyg_files/eval_validation.py
 gnn_pyg_files/eval_validation.out
 gnn_pyg_files/hyp_grid.py
+gnn_experimental
 .DS_Store
 gnn_pyg_files/.DS_Store
 

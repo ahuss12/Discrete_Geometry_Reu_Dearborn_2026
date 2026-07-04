@@ -155,7 +155,9 @@ def eval_one_model(model_path, cones, max_steps, progress=False):
     except Exception as e:
         return {"path": model_path, "error": f"load: {e}"}
     a = ckpt["args"]
-    dim = a["max_dimension"]
+    ## feature width must match training: padded runs store it in "padding",
+    ## older checkpoints fall back to max_dimension
+    dim = a.get("padding") or a["max_dimension"]
 
     def build(cone):
         g = CGLGraph(dimension=dim)
@@ -255,13 +257,18 @@ def make_png(models, out_png, meta):
         v = group_value(m, gkey)
         by_grp["n/a" if v is None else v].append(m)
     # numeric axes (lr, embedding_size, ...) sort/scale numerically; categorical
-    # (layer_type) and booleans (early_termination) are treated as discrete labels
+    # (layer_type) and booleans (early_termination) are treated as discrete labels.
+    # int-coded enums (reward_type) and any axis containing a value <= 0 are also
+    # categorical — a log axis silently drops those points
     def _numeric(g):
         return isinstance(g, (int, float)) and not isinstance(g, bool)
     groups = sorted(by_grp, key=lambda g: (not _numeric(g), g if _numeric(g) else str(g)))
-    numeric = all(_numeric(g) for g in groups)
+    numeric = (all(_numeric(g) and g > 0 for g in groups)
+               and gkey not in {"reward_type"})
     xpos = {g: (g if numeric else i) for i, g in enumerate(groups)}
-    palette = plt.cm.viridis(np.linspace(0, 1, len(groups)))
+    # fixed categorical order (CVD-validated); falls back to viridis past 8 groups
+    palette = (CATEGORICAL[:len(groups)] if len(groups) <= len(CATEGORICAL)
+               else plt.cm.viridis(np.linspace(0, 1, len(groups))))
     color = {g: palette[i] for i, g in enumerate(groups)}
 
     def style_x(a, ylabel):
@@ -282,12 +289,23 @@ def make_png(models, out_png, meta):
                           statistics.pstdev(vals) if len(vals) > 1 else 0.0, len(vals))
         return out
 
+    rng = np.random.default_rng(0)
+
+    def real_points(a, g, metric, marker="o"):
+        ## one small transparent dot per model (seed) behind the group mean
+        vals = [v for v in (summarize(m)[metric] for m in by_grp[g]) if v == v]
+        if numeric:  # log x-axis: jitter multiplicatively
+            xs = xpos[g] * (1 + rng.uniform(-0.04, 0.04, len(vals)))
+        else:
+            xs = xpos[g] + rng.uniform(-0.09, 0.09, len(vals))
+        a.scatter(xs, vals, s=16, alpha=0.45, color=color[g], marker=marker,
+                  edgecolors="0.4", linewidths=0.4, zorder=2)
+
     fig, ax = plt.subplots(2, 3, figsize=(19, 11))
     fig.suptitle(f"{meta.get('dataset', 'validation')}-set eval — greedy policy (no MCTS)  |  "
                  f"{_nrange(meta)}, {meta['det_min']}≤d≤{meta['det_max']}, "
                  f"max_steps={meta.get('max_steps', '?')}  "
-                 f"({meta['n_cones']} cones)  |  mean over seeds  |  {meta['n_models']} models  "
-                 f"|  color = {gkey}",
+                 f"({meta['n_cones']} cones)  |  mean over seeds  |  {meta['n_models']} models",
                  fontsize=15, fontweight="bold")
 
     def scalar_panel(a, metric, title, ylabel, lower=True):
@@ -298,6 +316,7 @@ def make_png(models, out_png, meta):
             m, s, k = d[g]
             a.errorbar([xpos[g]], [m], yerr=[s], marker="o", ms=10, capsize=4,
                        color=color[g], ecolor=color[g], zorder=3)
+            real_points(a, g, metric)
             a.annotate(f"n={k}", (xpos[g], m), textcoords="offset points", xytext=(7, 7), fontsize=7)
         if gs:
             best = (min if lower else max)(gs, key=lambda g: d[g][0])
@@ -320,6 +339,8 @@ def make_png(models, out_png, meta):
     for g in gs:
         a.errorbar([xpos[g]], [dt[g][0]], yerr=[dt[g][1]], marker="o", ms=10, capsize=4, color=color[g], zorder=3)
         a.errorbar([xpos[g]], [db[g][0]], yerr=[db[g][1]], marker="s", ms=9,  capsize=4, color=color[g], zorder=3)
+        real_points(a, g, "tie", marker="o")
+        real_points(a, g, "beat", marker="s")
     style_x(a, "fraction of resolved")
     a.set_title("Tie (circle) / win (square) vs min_sum")
     a.legend(handles=[Line2D([], [], marker="o", color="0.4", ls="", label="tie (gap=0)"),
@@ -340,19 +361,23 @@ def make_png(models, out_png, meta):
             arr = np.vstack(vecs)
             mean = arr.mean(axis=0)
             std = arr.std(axis=0) if arr.shape[0] > 1 else np.zeros(nbin)  # population std over models
-            a.bar(np.arange(nbin) + j * W, mean, width=W, yerr=std, color=color[g],
+            a.bar(np.arange(nbin) + j * W, mean, width=W, yerr=np.nan_to_num(std), color=color[g],
                   label=str(g), capsize=2, error_kw=dict(lw=0.8, alpha=0.7))
 
     # resolution vs determinant (binned) grouped; bar = mean over models, err = std over models
+    # integer-width buckets sized to the observed d range (all models share the same cone depot)
     a = ax[1, 1]
-    bins = [(2, 6), (7, 11), (12, 15), (16, 20), (21, 25), (26, 30)]
-    labels = [f"{lo}-{hi}" for lo, hi in bins]
+    all_d = [d for m in models for (_, d, _, _, _) in m["records"]]
+    d_lo, d_hi = (min(all_d), max(all_d)) if all_d else (meta["det_min"], meta["det_max"])
+    bucket = max(1, -(-(d_hi - d_lo + 1) // 6))
+    bins = [(s, min(s + bucket - 1, d_hi)) for s in range(d_lo, d_hi + 1, bucket)]
+    labels = [f"{lo}" if lo == hi else f"{lo}-{hi}" for lo, hi in bins]
 
     def res_by_det(m):
         out = []
         for lo, hi in bins:
             vals = [r for (_, d, _, _, r) in m["records"] if lo <= d <= hi]
-            out.append(statistics.mean(vals) if vals else 0.0)
+            out.append(statistics.mean(vals) if vals else np.nan)  # nan -> bar skipped
         return np.array(out, float)
 
     grouped_bars(a, len(bins), res_by_det)
@@ -430,7 +455,8 @@ def make_grid_png(models, out_png, meta):
     configs = sorted(by_cfg, key=_grid_sort_key)
     labels = ["\n".join(f"{a}={v}" for a, v in zip(axes, k)) for k in configs]
     xs = np.arange(len(configs))
-    colors = plt.cm.plasma(np.linspace(0.05, 0.95, len(configs)))
+    colors = (CATEGORICAL[:len(configs)] if len(configs) <= len(CATEGORICAL)
+              else plt.cm.plasma(np.linspace(0.05, 0.95, len(configs))))
 
     def cfg_agg(metric):
         ms, sds = [], []
@@ -653,23 +679,33 @@ def make_detail_png(model, out_png, meta):
     rates = [statistics.mean(by_dim[k]) for k in dims]
     bars = a.bar(dims, rates, width=0.7, color="C2", alpha=0.85)
     annotate_counts(a, bars, [len(by_dim[k]) for k in dims])
-    a.set_xticks(dims); a.set_ylim(0, 1.08)
+    if recs:
+        a.scatter(jit([nn for (nn, _, _, _, _) in recs]),
+                  jit([r for (_, _, _, _, r) in recs], scale=0.02),
+                  s=8, alpha=0.25, color="k", zorder=3)
+    a.set_xticks(dims); a.set_ylim(-0.06, 1.08)
     a.set_xlabel("dimension n"); a.set_ylabel("fraction resolved")
     a.set_title("1. Resolution rate vs dimension")
 
-    # 2. resolution rate vs determinant d (binned)
+    # 2. resolution rate vs determinant d (integer-width buckets sized to the observed d range)
     a = ax[0, 1]
-    edges = np.linspace(meta["det_min"], meta["det_max"] + 1, 7)
+    dvals = [dd for (_, dd, _, _, _) in recs]
+    d_lo, d_hi = (min(dvals), max(dvals)) if dvals else (meta["det_min"], meta["det_max"])
+    bucket = max(1, -(-(d_hi - d_lo + 1) // 7))
+    edges = np.arange(d_lo, d_hi + bucket + 1, bucket)
     centers, rrates, rcounts = [], [], []
     for i in range(len(edges) - 1):
         sel = [r for (_, dd, _, _, r) in recs if edges[i] <= dd < edges[i + 1]]
         if sel:
-            centers.append((edges[i] + edges[i + 1]) / 2)
+            centers.append((edges[i] + edges[i + 1] - 1) / 2)
             rrates.append(statistics.mean(sel)); rcounts.append(len(sel))
-    width = (edges[1] - edges[0]) * 0.85
-    bars = a.bar(centers, rrates, width=width, color="C0", alpha=0.85)
+    bars = a.bar(centers, rrates, width=bucket * 0.85, color="C0", alpha=0.85)
     annotate_counts(a, bars, rcounts)
-    a.set_ylim(0, 1.08)
+    if dvals:
+        a.scatter(jit(dvals, scale=min(0.3, bucket * 0.2)),
+                  jit([r for (_, _, _, _, r) in recs], scale=0.02),
+                  s=8, alpha=0.25, color="k", zorder=3)
+    a.set_ylim(-0.06, 1.08)
     a.set_xlabel("determinant d"); a.set_ylabel("fraction resolved")
     a.set_title("2. Resolution rate vs determinant")
 
@@ -679,6 +715,9 @@ def make_detail_png(model, out_png, meta):
         lo, hi = min(gaps), max(gaps)
         a.hist(gaps, bins=range(lo, hi + 2), align="left", rwidth=0.85, color="C4")
         a.axvline(0.0, color="gray", lw=1, ls="--")
+        ## rug strip of the individual gaps along the bottom
+        a.scatter(jit(gaps), np.random.uniform(0.015, 0.06, len(gaps)) * a.get_ylim()[1],
+                  s=8, alpha=0.25, color="k", zorder=3)
         n_opt = sum(1 for g in gaps if g <= 0)
         a.set_title(f"3. Gap distribution  (≤min_sum: {n_opt}/{len(gaps)})")
     else:
