@@ -161,6 +161,26 @@ def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -
 
     return step_count, True
 
+## function to apply temperature annealing
+def temp_anneal_func(
+    target_temperature: float,
+    temp_annealing: str,
+    step: int,
+    baseline_len: int,
+    *, 
+    temp_frac: float = 0.5,
+    temp_decay_exp: float = 1.0,
+    temp_min: float = 0.1) -> float:
+
+    TEMP_FUNCTIONS = {
+        "Constant": lambda target, i, k, tmin, frac, exp: target,
+        "Cliff": lambda target, i, k, tmin, frac, exp: target if i < max(1, frac * k) else tmin,
+        "Linear": lambda target, i, k, tmin, frac, exp: max(tmin, target - (target - tmin)/(max(1, frac * k)) * i),
+        "Exponential": lambda target, i, k, tmin, frac, exp: max(tmin, target * (tmin/target) ** ((i/max(frac*k, 1))**exp)),
+    }
+    return TEMP_FUNCTIONS[temp_annealing](target_temperature, step, baseline_len, temp_min, temp_frac, temp_decay_exp)
+
+
 ## reward function module so we can easily switch our reward function
 def reward_function(
     reward_type: int,
@@ -211,7 +231,11 @@ def self_play_episode(
     initial_state: CGLGraph, 
     device: torch.device,
     rng: random.Random,
-    temperature: float = 1.0,
+    target_temperature: float = 1.0,
+    temp_annealing: str = "Constant",
+    temp_frac: float = 0.5,
+    temp_decay_exp: float = 1.0,
+    temp_min: float = 0.1,
     c_puct: float = 1.5,
     timeout_penalty: float = 0.0, 
     dirichlet_alpha: Optional[float] = None,
@@ -256,8 +280,21 @@ def self_play_episode(
         
         if early_termination and i >= timeout_multiplier * baseline_steps_taken:
             break
-        
-        result = search.run(state, temperature = temperature, add_root_noise = True, reuse_node = reuse_node)        
+
+        play_temperature = temp_anneal_func(
+            target_temperature, 
+            temp_annealing, 
+            step = i,
+            baseline_len = baseline_steps_taken,
+            temp_frac = temp_frac, 
+            temp_decay_exp = temp_decay_exp, 
+            temp_min = temp_min)
+
+        result = search.run(state,
+        target_temperature=target_temperature, 
+        play_temperature=play_temperature, 
+        add_root_noise = True, 
+        reuse_node = reuse_node)        
 
         ## log history
         states.append(state.copy())
@@ -394,8 +431,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs-per-iter", type=int, default=1)
     parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--timeout-penalty", type=float, default=1.5) ## positive penalty -> negative reward
+    parser.add_argument("--target-temperature", type=float, default=1.0)
+    parser.add_argument("--temp-annealing", choices=["Constant", "Cliff", "Exponential", "Linear"], default="Constant")
+    parser.add_argument("--temp-frac", type=float, default=0.5, help="Within an episode, the fraction (of min_sum steps) that we anneal for. How long it takes to get to temp_min")
+    parser.add_argument("--temp-decay-exp", type=float, default=1.0, help="How much the exponential temp annealing decays by")
+    parser.add_argument("--temp-min", type=float, default=0.1, help="annealing minimum")
+    parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
     parser.add_argument("--timeout-multiplier", type=float, default=2.0) ## how many times the baseline are tolerated before the computation times out
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--det-min", type=int, default=2)
@@ -521,7 +562,11 @@ def main() -> None:
             initial_state=training_examples[ep],
             device=device,
             rng=rng,
-            temperature=args.temperature,
+            target_temperature=args.target_temperature,
+            temp_annealing=args.temp_annealing,
+            temp_frac=args.temp_frac,
+            temp_decay_exp=args.temp_decay_exp,
+            temp_min=args.temp_min,
             c_puct=args.c_puct,
             timeout_penalty=args.timeout_penalty,
             dirichlet_alpha=args.dirichlet_alpha,
