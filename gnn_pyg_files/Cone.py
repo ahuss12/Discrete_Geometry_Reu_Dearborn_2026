@@ -27,7 +27,8 @@ class Cone:
         if any(len(r) != n for r in rays):
             raise ValueError("cone must be full dimensional")
 
-        if intDet(rays) == 0:
+        M = [list(ray) for ray in rays]
+        if intDet(M) == 0:
             raise ValueError("cone must be simplicial")
 
         return cls(rays)
@@ -50,7 +51,8 @@ class Cone:
 
     @cached_property
     def multiplicity(self) -> int:
-        return abs(intDet(self.rays))
+        M = [list(ray) for ray in self.rays]
+        return abs(intDet(M))
 
     def barycentricCoords(self, p: Vector) -> tuple[Fraction, ...]:
         A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]

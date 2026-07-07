@@ -34,7 +34,8 @@ class MCTSNode:
 class SearchResult:
     actions: List[latticeId] 
     visit_counts: np.ndarray ## visit counts of children nodes from current state
-    temperature: float
+    target_temperature: float
+    play_temperature: float
     root: "MCTSNode" = field(default=None)
 
     ## gives array of visit probabilities based on AlphaZero-style policy output
@@ -44,12 +45,12 @@ class SearchResult:
         if counts.sum() == 0:
             return counts
         
-        if self.temperature <= 1e-8:
+        if self.target_temperature <= 1e-8:
             pi = np.zeros_like(counts)
             pi[np.argmax(counts)] = 1.0
             return pi
         
-        counts = counts ** (1.0/self.temperature)
+        counts = counts ** (1.0/self.target_temperature)
         pi = counts / counts.sum()
         return pi
 
@@ -58,12 +59,14 @@ class SearchResult:
     def best_action(self) -> latticeId:
         if len(self.visit_counts) == 0:
            raise ValueError("no actions in search result")
+        if self.play_temperature <= 1e-8:
+            return self.actions[np.argmax(self.visit_counts)]
+
+        counts = self.visit_counts.astype(np.float64)
+        counts = counts / counts.max()
+        pi = counts ** (1.0/self.play_temperature)
+        pi = pi / pi.sum()
         
-        pi = self.visit_probs
-
-        if self.temperature <= 1e-8:
-            return self.actions[np.argmax(pi)]
-
         return self.actions[int(np.random.choice(len(pi), p = pi))]
 
 ## Small AlphaZero-style PUCT search for the cone environment.
@@ -92,7 +95,14 @@ class MCTS:
         self.device = torch.device(device)
 
     ## Runs the MCTS for num_simulations trials and outputs a SearchResult object (which can itself be called to give the final action choice)
-    def run(self, root_state: CGLGraph, *, temperature: float = 1.0, add_root_noise: bool = False, reuse_node: Optional["MCTSNode"] = None) -> SearchResult:
+    def run(self, 
+    root_state: CGLGraph,
+    *, 
+    target_temperature: float = 1.0, 
+    play_temperature: float = 1.0, 
+    add_root_noise: bool = False, 
+    reuse_node: Optional["MCTSNode"] = None) -> SearchResult:
+
         self.model.eval()
 
         if reuse_node is not None:
@@ -102,7 +112,7 @@ class MCTS:
             self._expand(root)
 
         if root.P.size == 0:
-            return SearchResult([], np.zeros(0, dtype=np.int64), temperature, root)
+            return SearchResult([], np.zeros(0, dtype=np.int64), target_temperature, play_temperature, root)
 
         ## Dirichilet noise
         if add_root_noise and self.dirichlet_alpha is not None and root.P.size > 1:
@@ -139,7 +149,7 @@ class MCTS:
                 parent.Q[action_index] = parent.W[action_index] / parent.N[action_index]
 
         visit_counts = root.N.copy()
-        return SearchResult(root.actions, visit_counts, temperature, root)
+        return SearchResult(root.actions, visit_counts, target_temperature, play_temperature, root)
 
     ## Expands a leaf node, adding outward edges for all possible subdivision actions. Return estimated value of current state. 
     def _expand(self, node: MCTSNode) -> float:
@@ -250,13 +260,13 @@ def main():
 
     # ---- 5. run: conservation + Q=W/N invariant ---------------------------
     seed()
-    res = mcts.run(singular_root(), temperature=1.0, add_root_noise=False)
+    res = mcts.run(singular_root(), target_temperature=1.0, play_temperature = 1.0, add_root_noise=False)
     assert res.visit_counts.sum() == mcts.num_simulations, "visits not conserved"
     # rebuild root to inspect the tree (run discards it) -> verify on a manual run
     root = MCTSNode(state=singular_root()); mcts._expand(root)
     # invariant check via fresh instrumented search
     seed()
-    r2 = mcts.run(singular_root(), temperature=1.0, add_root_noise=False)
+    r2 = mcts.run(singular_root(), target_temperature=1.0, play_temperature = 1.0,add_root_noise=False)
     assert np.array_equal(res.visit_counts, r2.visit_counts), "run not reproducible"
     print("[5] run conservation + reproducibility OK")
 
@@ -271,10 +281,10 @@ def main():
 
     # ---- 7. SearchResult.visit_probs --------------------------------------
     counts = np.array([1, 3, 6], dtype=np.int64)
-    sr1 = SearchResult(["a", "b", "c"], counts, temperature=1.0)
+    sr1 = SearchResult(["a", "b", "c"], counts, target_temperature=1.0, play_temperature = 1.0)
     assert abs(sr1.visit_probs.sum() - 1.0) < 1e-9, "probs not normalized"
     assert np.allclose(sr1.visit_probs, counts / counts.sum()), "T=1 != normalized"
-    sr0 = SearchResult(["a", "b", "c"], counts, temperature=1e-9)
+    sr0 = SearchResult(["a", "b", "c"], counts, target_temperature=1e-9, play_temperature = 1e-9)
     oneh = np.zeros(3); oneh[np.argmax(counts)] = 1.0
     assert np.allclose(sr0.visit_probs, oneh), "T->0 not one-hot"
     print("[7] visit_probs OK")
@@ -283,26 +293,26 @@ def main():
     assert sr0.best_action == "c", "greedy best_action wrong"
     assert sr1.best_action in {"a", "b", "c"}, "stochastic action out of set"
     try:
-        SearchResult([], np.zeros(0, np.int64), temperature=1.0).best_action
+        SearchResult([], np.zeros(0, np.int64),target_temperature=1.0, play_temperature = 1.0).best_action
         assert False, "empty best_action should raise"
     except ValueError:
         pass
     print("[8] best_action OK")
 
     # ---- 9. terminal root -> empty SearchResult ---------------------------
-    rt = mcts.run(nonsingular_root(), temperature=1.0)
+    rt = mcts.run(nonsingular_root(), target_temperature=1.0, play_temperature = 1.0)
     assert rt.actions == [] and rt.visit_counts.size == 0, "terminal run not empty"
     print("[9] terminal root OK")
 
     # ---- 10. tree reuse: visits carry over --------------------------------
     seed()
-    res1 = mcts.run(singular_root(), temperature=1.0, add_root_noise=False)
+    res1 = mcts.run(singular_root(), target_temperature=1.0, play_temperature = 1.0, add_root_noise=False)
     action_idx = int(np.argmax(res1.visit_counts))
     reuse = res1.root.children.get(action_idx)
     assert reuse is not None, "most-visited action should have been expanded"
     prior_visits = int(reuse.N.sum())
     seed()
-    res2 = mcts.run(reuse.state, temperature=1.0, add_root_noise=False,
+    res2 = mcts.run(reuse.state, target_temperature=1.0, play_temperature = 1.0, add_root_noise=False,
                     reuse_node=reuse)
     assert res2.visit_counts.sum() == prior_visits + mcts.num_simulations, "reuse: visits not conserved"
     assert res2.root is reuse, "reuse: root should be the passed-in node"

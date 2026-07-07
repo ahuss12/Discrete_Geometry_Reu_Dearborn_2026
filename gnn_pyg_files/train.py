@@ -52,7 +52,6 @@ import argparse
 import json
 import random
 import time
-from datetime import datetime
 from typing import List, Optional
 from diagnostics import Diagnostics, extract_value
 from trajectory_log import TrajectoryLogger
@@ -162,10 +161,29 @@ def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -
 
     return step_count, True
 
+## function to apply temperature annealing
+def temp_anneal_func(
+    target_temperature: float,
+    temp_annealing: str,
+    step: int,
+    baseline_len: int,
+    *, 
+    temp_frac: float = 0.5,
+    temp_decay_exp: float = 1.0,
+    temp_min: float = 0.1) -> float:
+
+    TEMP_FUNCTIONS = {
+        "Constant": lambda target, i, k, tmin, frac, exp: target,
+        "Cliff": lambda target, i, k, tmin, frac, exp: target if i < max(1, frac * k) else tmin,
+        "Linear": lambda target, i, k, tmin, frac, exp: max(tmin, target - (target - tmin)/(max(1, frac * k)) * i),
+        "Exponential": lambda target, i, k, tmin, frac, exp: max(tmin, target * (tmin/target) ** ((i/max(frac*k, 1))**exp)),
+    }
+    return TEMP_FUNCTIONS[temp_annealing](target_temperature, step, baseline_len, temp_min, temp_frac, temp_decay_exp)
+
+
 ## reward function module so we can easily switch our reward function
 def reward_function(
-    resolved_reward_type: int,
-    timeout_reward_type: int,
+    reward_type: int,
     resolved: bool, 
     t: int, 
     state: CGLGraph, 
@@ -173,29 +191,31 @@ def reward_function(
     baseline_steps_taken: int, 
     timeout_penalty: float,
     max_steps: int,
+    root_mult: int,
     baseline_left: int,
     baseline_to_go: Optional[list[int,...]] = None, 
     ) -> float:
     if resolved:
         variants = [
             lambda: float(baseline_steps_taken - agent_steps_taken), #0 standard
-            lambda: float(-agent_steps_taken + t), #1 all negative reward, no baseline
-            lambda: sum(np.log2(cone.multiplicity) for cone in state._cone_objects.values()) - (agent_steps_taken -t), #2 log-sum-mult
-            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #3 normalized standard
-            lambda: float(baseline_to_go[t] - agent_steps_taken + t)/max(baseline_steps_taken, 1), #4 potential-shaped per-state standard
-            lambda: 1.0 + float(np.clip((baseline_to_go[t] - agent_steps_taken + t) / max(baseline_steps_taken, 1), -1.0, 1.0)), #5 possible fix to #4. Makes resolution always look good
-            lambda: float(-agent_steps_taken)
+            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)), #1 normalized by baseline
+            lambda: float(-agent_steps_taken), #2 all negative
+            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult, #3 alperen's suggestion
+            lambda: float(root_mult - agent_steps_taken)/root_mult, #4 dummy reward
+            lambda: max(-1.0, min(1.0, 1.0 - (agent_steps_taken - t) / max(baseline_steps_taken, 1))), #5 claude suggestion - shape along the path
         ]
-        reward = variants[resolved_reward_type]()
+        reward = variants[reward_type]()
             
     else:
         variants = [
             lambda: -timeout_penalty, #0 standard
-            lambda: float(-timeout_penalty)/max(baseline_steps_taken, 1), #1 normalized standard
-            lambda: float(baseline_to_go[t] - (agent_steps_taken - t)) / max(baseline_steps_taken, 1) - timeout_penalty, #2 normalized and per-state shaped
-            lambda: -float(np.clip((agent_steps_taken - t + baseline_left) / max(baseline_steps_taken, 1), 0.0, 2.0)) - timeout_penalty, #3 clipped and normalized
+            lambda: float((baseline_steps_taken - agent_steps_taken)/max(baseline_steps_taken, 1)) - timeout_penalty, #1 normalized by baseline
+            lambda: -timeout_penalty,#2 all negative
+            lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult - timeout_penalty, #3 alperen's suggestion
+            lambda: float(root_mult - agent_steps_taken)/root_mult - timeout_penalty, #4 dummy reward
+            lambda: max(-1.0, min(1.0, 1.0 - ((agent_steps_taken - t) + baseline_left) / max(baseline_steps_taken, 1))) #5 claude suggestion - shape along the path
         ]
-        reward = variants[timeout_reward_type]()
+        reward = variants[reward_type]()
     return reward
 
 # ===========================================================================================
@@ -211,7 +231,11 @@ def self_play_episode(
     initial_state: CGLGraph, 
     device: torch.device,
     rng: random.Random,
-    temperature: float = 1.0,
+    target_temperature: float = 1.0,
+    temp_annealing: str = "Constant",
+    temp_frac: float = 0.5,
+    temp_decay_exp: float = 1.0,
+    temp_min: float = 0.1,
     c_puct: float = 1.5,
     timeout_penalty: float = 0.0, 
     dirichlet_alpha: Optional[float] = None,
@@ -221,13 +245,12 @@ def self_play_episode(
     episode_idx: int = -1, # for logging
     timeout_multiplier: float = 2.0,
     early_termination: bool = False,
-    resolved_reward_type: int,
-    timeout_reward_type: int
+    reward_type: int
     ) -> List[CGLGraph]:
     states = []
     policies = []
     action_options_history = [] ## latticeIds of the available actions at each time step. 
-    baseline_to_go = []         ## min_sum rays-to-finish from each visited state
+    # baseline_to_go = []         ## min_sum rays-to-finish from each visited state
 
     ## for data logging
     root_cone = next(iter(initial_state._cone_objects.values()))
@@ -253,32 +276,50 @@ def self_play_episode(
     ## run full MCTS from initial state to decomposition. 
     for i in range(max_steps):
         if state.isDecomposed():
-            resolved = True
             break
         
         if early_termination and i >= timeout_multiplier * baseline_steps_taken:
             break
-        
-        result = search.run(state, temperature = temperature, add_root_noise = True, reuse_node = reuse_node)        
+
+        play_temperature = temp_anneal_func(
+            target_temperature, 
+            temp_annealing, 
+            step = i,
+            baseline_len = baseline_steps_taken,
+            temp_frac = temp_frac, 
+            temp_decay_exp = temp_decay_exp, 
+            temp_min = temp_min)
+
+        result = search.run(state,
+        target_temperature=target_temperature, 
+        play_temperature=play_temperature, 
+        add_root_noise = True, 
+        reuse_node = reuse_node)        
 
         ## log history
         states.append(state.copy())
         policies.append(torch.tensor(result.visit_probs, dtype = torch.float32))
         action_options_history.append(list(result.actions))
 
-        baseline_from_here, _, _ = min_sum(state)
-        baseline_to_go.append(baseline_from_here)
+        # baseline_from_here, _, _ = min_sum(state)
+        # baseline_to_go.append(baseline_from_here)
 
         # Training uses MCTS visit policy
         a = result.best_action
         subdivision_points.append(state._lattice_id_to_coord[a])   # log history
         state.subdivide(a)
+        reuse_node = result.root.children.get(result.actions.index(a))
 
-    if resolved: 
-        baseline_left = 0 
+    if state.isDecomposed():
+        resolved = True
+
+    if resolved:
+        baseline_left = 0
     else:
         baseline_left,_ ,_ = min_sum(state)
-        
+
+    ## capture the terminal fan now
+    final_fan = [c.rays for c in state._cone_objects.values()]
     
     examples: List[HeteroData] = []
     agent_steps_taken = len(states) 
@@ -286,8 +327,8 @@ def self_play_episode(
 
     ## for each observed state, attach training targets
     for t, state in enumerate(states):
-        reward = reward_function(resolved_reward_type, 
-        timeout_reward_type,
+        reward = reward_function(
+        reward_type,
         resolved, 
         t, 
         state, 
@@ -295,8 +336,8 @@ def self_play_episode(
         baseline_steps_taken, 
         timeout_penalty, 
         max_steps, 
-        baseline_left=baseline_left,
-        baseline_to_go=baseline_to_go)
+        root_mult=root_mult,
+        baseline_left=baseline_left)
         rewards.append(reward)
 
         attach_targets(state, 
@@ -310,7 +351,6 @@ def self_play_episode(
 
     # log cone subdivision trajectory (agent's action choices)
     if traj is not None:
-        final_fan = [c.rays for c in state._cone_objects.values()]
         traj.log(episode=episode_idx, root_rays=root_rays, points=subdivision_points,
                  final_fan=final_fan, resolved=resolved, agent_rays=agent_steps_taken, 
                  baseline_rays=baseline_steps_taken, baseline_points=baseline_actions,                     
@@ -324,7 +364,7 @@ def self_play_episode(
             agent_rays=agent_steps_taken,
             baseline_rays=baseline_steps_taken,
             random_rays=random_steps, random_resolved=random_resolved,
-            resolved=resolved or states[-1].isDecomposed()
+            resolved=resolved
         )
         ## value-head calibration: predicted value vs reward target over visited states
         if states:
@@ -391,7 +431,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs-per-iter", type=int, default=1)
     parser.add_argument("--mcts-sims", type=int, default=16)
     parser.add_argument("--c-puct", type=float, default=1.5)
-    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--target-temperature", type=float, default=1.0)
+    parser.add_argument("--temp-annealing", choices=["Constant", "Cliff", "Exponential", "Linear"], default="Constant")
+    parser.add_argument("--temp-frac", type=float, default=0.5, help="Within an episode, the fraction (of min_sum steps) that we anneal for. How long it takes to get to temp_min")
+    parser.add_argument("--temp-decay-exp", type=float, default=1.0, help="How much the exponential temp annealing decays by")
+    parser.add_argument("--temp-min", type=float, default=0.1, help="annealing minimum")
     parser.add_argument("--timeout-penalty", type=float, default=1.0) ## positive penalty -> negative reward
     parser.add_argument("--timeout-multiplier", type=float, default=2.0) ## how many times the baseline are tolerated before the computation times out
     parser.add_argument("--max-steps", type=int, default=40)
@@ -412,13 +456,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", type=str, default="", help="Optional checkpoint to continue training from.")
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--dirichlet-eps", type=float, default=0.25)
-    parser.add_argument("--embedding-size", type=int, default=7)
+    parser.add_argument("--embedding-size", type=int, default=64)
     parser.add_argument("--min-dimension", type=int, default=2)
-    parser.add_argument("--max-dimension", type=int, default=3)
+    parser.add_argument("--max-dimension", type=int, default=4)
+    parser.add_argument("--padding", type=int, default=4, help="Zero-padding length of node features. Must be equal to or larger than max dimension.")
     parser.add_argument("--diag-dir", type=str, default="results")
     parser.add_argument("--early-termination", action="store_true")
-    parser.add_argument("--resolved-reward-type", type=int,default=0)
-    parser.add_argument("--timeout-reward-type", type=int, default=0)
+    parser.add_argument("--reward-type", type=int,default=1)
+    parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GraphConv")
+    parser.add_argument("--save-every", type=int, default=0,
+                        help="Save a separate checkpoint copy (<run_dir>/checkpoints/model_ep<N>.pt) "
+                             "every N episodes. 0 (default) saves only the final model.")
 
     # old experiment controls.
     #parser.add_argument("--enumerator", choices=["fpp", "hybrid", "grid"], default="fpp")
@@ -428,6 +476,14 @@ def build_parser() -> argparse.ArgumentParser:
     #parser.add_argument("--grid-max-points", type=int, default=0)
     #parser.add_argument("--grid-random-trials", type=int, default=0)
     return parser
+
+
+def _next_run_dir(base_dir: str) -> str:
+    """Next available <base_dir>/run_<N> directory, scanning existing run_* dirs for the highest N."""
+    os.makedirs(base_dir, exist_ok=True)
+    existing = [int(name[4:]) for name in os.listdir(base_dir)
+                if name.startswith("run_") and name[4:].isdigit()]
+    return os.path.join(base_dir, f"run_{max(existing, default=-1) + 1}")
 
 
 def main() -> None:
@@ -440,7 +496,7 @@ def main() -> None:
 
     ## let the network learn be initialized to the structure of the graph
     dummy_cone = Cone(generateRandomCone(n = args.max_dimension, d = args.det_max, rng = rng))
-    meta_state = CGLGraph(dimension = args.max_dimension)
+    meta_state = CGLGraph(dimension = args.padding)
     meta_state.addConeNode(dummy_cone)
     model = network(
         meta_state.metadata(),
@@ -448,6 +504,7 @@ def main() -> None:
         embedding_size=args.embedding_size,
         num_layers=args.num_blocks,
         dropout=args.dropout,
+        layer_type=args.layer_type
     ).to(device)
 
     meta_state = meta_state.to(device)
@@ -469,7 +526,7 @@ def main() -> None:
 
     ## for data visualization
     ## =======================================================================================
-    run_dir = os.path.join(args.diag_dir, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    run_dir = _next_run_dir(args.diag_dir)
     os.makedirs(run_dir, exist_ok=True)
     ## default checkpoint lives inside this run's folder so it is never silently
     ## overwritten by a later run and stays co-located with its config/diagnostics.
@@ -491,7 +548,7 @@ def main() -> None:
     for i in range(args.episodes):
         n = rng.randint(args.min_dimension, args.max_dimension)
         d = rng.randint(args.det_min, args.det_max)
-        g = CGLGraph(dimension = args.max_dimension)
+        g = CGLGraph(dimension = args.padding)
         g.addConeNode(Cone(generateRandomCone(n,d, rng = rng)))
         training_examples.append(g)
 
@@ -505,7 +562,11 @@ def main() -> None:
             initial_state=training_examples[ep],
             device=device,
             rng=rng,
-            temperature=args.temperature,
+            target_temperature=args.target_temperature,
+            temp_annealing=args.temp_annealing,
+            temp_frac=args.temp_frac,
+            temp_decay_exp=args.temp_decay_exp,
+            temp_min=args.temp_min,
             c_puct=args.c_puct,
             timeout_penalty=args.timeout_penalty,
             dirichlet_alpha=args.dirichlet_alpha,
@@ -515,8 +576,7 @@ def main() -> None:
             episode_idx=ep,
             timeout_multiplier = args.timeout_multiplier,
             early_termination=args.early_termination,
-            resolved_reward_type=args.resolved_reward_type,
-            timeout_reward_type=args.timeout_reward_type
+            reward_type = args.reward_type
         )
 
         replay.extend(examples)
@@ -541,10 +601,13 @@ def main() -> None:
             if (ep + 1) % max(1, args.episodes // 20) == 0:
                 tqdm.write(f"ep={ep+1} replay={len(replay)} metrics={metrics}")
                 
-        # ---- periodic checkpoint (NEW) ----  <-- here, inside the loop, outside the batch-size gate
-        if (ep + 1) % 200 == 0:
+        ## periodic checkpoint copies: one new file per interval so earlier
+        ## checkpoints are never overwritten (0 = final save only)
+        if args.save_every and (ep + 1) % args.save_every == 0:
+            ckpt_dir = os.path.join(run_dir, "checkpoints")
+            os.makedirs(ckpt_dir, exist_ok=True)
             torch.save({"model": model.state_dict(), "args": vars(args), "episode": ep + 1},
-                       save_path)
+                       os.path.join(ckpt_dir, f"model_ep{ep + 1}.pt"))
 
     ## record wall-clock timing of the self-play/training loop (read by read_diagnostics.py)
     train_elapsed = time.perf_counter() - train_start

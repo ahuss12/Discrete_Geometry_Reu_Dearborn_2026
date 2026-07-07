@@ -6,15 +6,15 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from torch_geometric.data import HeteroData
-from torch_geometric.nn import HeteroConv, GATv2Conv
+from torch_geometric.nn import HeteroConv, GATv2Conv, GraphConv
 from torch_geometric.utils import softmax
 
 
-EMBEDDING_SIZE = 7 ## default embedding length
+EMBEDDING_SIZE = 64 ## default embedding length
 
-## Our GNN uses GATv2Conv layers + GeLU activation. 
-class GNN(nn.Module):
-    def __init__(self, hidden_channels = 64, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.1):
+## Our GNN uses GATv2Conv layers + ReLU activation. 
+class GAT(nn.Module):
+    def __init__(self, hidden_channels: int = 128, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.05):
         super().__init__()
         self.convs = nn.ModuleList()
         self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
@@ -24,7 +24,7 @@ class GNN(nn.Module):
             out_num = hidden_channels
             has_residual = True
             if i == 0: has_residual = False
-            if i == num_layers - 1: 
+            if i == num_layers - 1:
                 out_num = out_channels
                 has_residual = False
 
@@ -53,12 +53,48 @@ class GNN(nn.Module):
         for i, conv in enumerate(self.convs):
             x_dict = conv(x_dict, edge_index_dict, edge_attr_dict = edge_attr_dict)
             if i < len(self.convs) - 1:
-                x_dict = {k: F.gelu(self.norms[i](v)) for k, v in x_dict.items()}
+                x_dict = {k: F.relu(self.norms[i](v)) for k, v in x_dict.items()}
+        return x_dict
+
+## GraphConv GNN for A/B testing
+class Graph(nn.Module):
+    def __init__(self, hidden_channels: int = 128, out_channels = EMBEDDING_SIZE, num_layers = 4, dropout: float = 0.05):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList(nn.LayerNorm(hidden_channels) for _ in range(num_layers - 1))
+        self.dropouts = nn.ModuleList(nn.Dropout(dropout) for _ in range(num_layers - 1))
+
+        for i in range(num_layers):
+            in_num = (-1, -1)
+            out_num = hidden_channels
+            if i == num_layers - 1: out_num = out_channels
+
+            conv = HeteroConv({
+                ('cone', 'has', 'generator'): GraphConv(in_num, out_num),
+                ('generator', 'of', 'cone'): GraphConv(in_num, out_num),
+                ('cone', 'contains', 'lattice'): GraphConv(in_num, out_num),
+                ('lattice', 'in', 'cone'): GraphConv(in_num, out_num),
+                ('generator', 'reaches', 'lattice'): GraphConv(in_num, out_num),
+                ('lattice', 'reached_by', 'generator'): GraphConv(in_num, out_num),
+                ('cone', 'adjacent', 'cone'):  GraphConv(in_num, out_num),
+                ('virtual', 'overview', 'cone'):  GraphConv(in_num, out_num),
+                ('cone', 'summary', 'virtual'): GraphConv(in_num, out_num),
+            }, aggr = 'sum')
+            self.convs.append(conv)
+
+    def forward(self, x_dict, edge_index_dict, edge_weight_dict=None):
+        for i, conv in enumerate(self.convs):
+            residual = x_dict
+            x_dict = conv(x_dict, edge_index_dict, edge_weight_dict)
+            if i < len(self.convs) - 1:
+                x_dict = {k: self.dropouts[i](F.relu(self.norms[i](v))) for k, v in x_dict.items()}
+                if i != 0:
+                    x_dict = {k: v + residual[k] for k, v in x_dict.items()}
         return x_dict
 
 class valueHead(nn.Module): 
     """ Takes in the graph-level embedding vector and outputs a learned scalar valuation. 
-    LayerNorm -> FC Layer -> GeLU -> FC Layer -> Scalar Output
+    LayerNorm -> FC Layer -> ReLU -> FC Layer -> Scalar Output
 
     Shape: 
      - g: (EMBEDDING_SIZE,) graph-level embedding vector
@@ -74,7 +110,7 @@ class valueHead(nn.Module):
 
     def forward(self, g):
         g = self.norm(g)
-        g = F.gelu(self.fc1(g))
+        g = F.relu(self.fc1(g))
         g = self.fc2(g)
         return g.squeeze(-1)
 
@@ -92,13 +128,19 @@ class policyHead(nn.Module):
     def forward(self, Z, g):        
         x = torch.cat([Z, g], dim = -1)
         x = self.norm(x)
-        x = F.gelu(self.fc1(x))
+        x = F.relu(self.fc1(x))
         return self.fc2(x).squeeze(-1)
 
 class network(nn.Module):
-    def __init__(self, metadata, hidden: int = 64, embedding_size: int = EMBEDDING_SIZE, num_layers: int = 4, dropout: float = 0.1):
+    def __init__(self, metadata, hidden: int = 128, embedding_size: int = EMBEDDING_SIZE, num_layers: int = 4, dropout: float = 0.05, layer_type: str = "GraphConv"):
         super().__init__()
-        self.gnn = GNN(hidden_channels = hidden, out_channels = embedding_size, num_layers = num_layers, dropout = dropout)
+        if layer_type == "GAT":
+            self.gnn = GAT(hidden_channels = hidden, out_channels = embedding_size, num_layers = num_layers, dropout = dropout)
+        elif layer_type == "GraphConv":
+            self.gnn = Graph(hidden_channels = hidden, out_channels = embedding_size, num_layers = num_layers, dropout = dropout)
+        else:
+            raise ValueError("not accepted layer type")
+
         self.value_head = valueHead(in_channels = embedding_size)
         self.policy_head = policyHead(in_channels = 2 * embedding_size)
 
@@ -139,7 +181,7 @@ def main():
     meta = graph.metadata()
     print("node types:", meta[0])          # expect ['cone','lattice','global']
 
-    net = network(meta, hidden=64, embedding_size=EMBEDDING_SIZE, num_layers=4)
+    net = network(meta, hidden=128, embedding_size=EMBEDDING_SIZE, num_layers=4)
     net(graph)
     net.eval()
 
