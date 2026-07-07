@@ -36,7 +36,7 @@ def extendedEuclid(a: int, b: int) -> tuple[int, int, int]:
     return old_r, old_s, old_t
 
 ## gives exact integer determinant using the Bareiss algorithm
-def intDet(M: tuple[Vector, ...]) -> int:
+def intDet(M: list[list[int]]) -> int:
     M = [list(row) for row in M]
     n = len(M)
     sign, prev = 1, 1
@@ -81,7 +81,7 @@ def canonicalForm(M: list[list[int]]) -> list[list[int]]:
     return M
 
 ## exact solve Ax = b, where A is a matrix and b a vector. Return vector x as a tuple of fractions. 
-def linsolve(A: list[list[int]], b:list[int]) -> tuple[Fraction,...]:
+def linsolve(A: list[list[int]], b:list[int]) -> tuple[Fraction, ...]:
     m = len(A)
     if m == 0:
         return ()
@@ -131,6 +131,20 @@ def linsolve(A: list[list[int]], b:list[int]) -> tuple[Fraction,...]:
         raise ValueError("System does not have a unique solution.")
 
     return tuple(M[i][n] for i in range(n))
+
+## applies cramer's rule to quickly find solution to Ax=b
+def cramer_coords(A: list[list[int]], b: list[int]) -> tuple[Fraction, ...]:
+    D = intDet(A) 
+
+    if D == 0:
+        return ValueError("Matrix A is not invertible")
+
+    n = len(A)
+    coords = []
+    for i in range(n):
+        a_i = Fraction(intDet([[A[j][k]] if k != i else b[j] for k in range(n)] for j in range(n)), D)
+        coords.append(a_i)
+    return tuple(coords)
 
 # ## sum of log of determinants of each cone in the fan
 # def log_det_sum(state) -> float:

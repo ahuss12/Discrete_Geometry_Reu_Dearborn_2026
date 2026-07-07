@@ -31,7 +31,9 @@ Parameters:
                      c_puct, layer_type, ...). Default: auto-detect the sweep's
                      varied axis from sweep_meta.json, else the arg that varies
                      across the evaluated models.
-  --workers W        parallel model-evaluation processes                (default 12)
+  --workers W        parallel evaluation processes for SWEEP mode; single-model
+                     mode (--model) always rolls out serially on one thread
+                                                                     (default 1)
   --out PATH         output PNG path (records.json/CSV derived from it)
   --replot           rebuild the PNG from a saved records.json, no rollouts
                      (with --group-by, re-groups the comparison on a new axis)
@@ -44,9 +46,14 @@ from tqdm import tqdm
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+# fixed categorical series colors, in CVD-safe order (blue, aqua, yellow, green,
+# violet, red, magenta, orange); assign by slot, never cycle
+CATEGORICAL = ["#2a78d6", "#1baf7a", "#eda100", "#008300",
+               "#4a3aa7", "#e34948", "#e87ba4", "#eb6834"]
+
 # selectable evaluation datasets (same cone schema; --dataset picks one)
 DEPOTS = {
-    "validation": os.path.join(HERE, "..", "datasets", "validation_set-2.json"),
+    "validation": os.path.join(HERE, "..", "datasets", "validation_set-3.json"),
     "test":       os.path.join(HERE, "..", "datasets", "test_set.json"),
 }
 
@@ -159,6 +166,15 @@ def eval_one_model(model_path, cones, max_steps, progress=False):
     ## older checkpoints fall back to max_dimension
     dim = a.get("padding") or a["max_dimension"]
 
+    ## a cone only fits in the model's input layer if its dimension <= feature width
+    n_skipped = sum(1 for c in cones if c["n"] > dim)
+    if n_skipped:
+        print(f"[{os.path.basename(model_path)}] skipping {n_skipped}/{len(cones)} cones "
+              f"with n > feature width {dim} (model cannot represent them)", flush=True)
+        cones = [c for c in cones if c["n"] <= dim]
+    if not cones:
+        return {"path": model_path, "error": f"no depot cones fit feature width {dim}"}
+
     def build(cone):
         g = CGLGraph(dimension=dim)
         g.addConeNode(Cone(tuple(tuple(r) for r in cone["rays"])))
@@ -205,6 +221,43 @@ def eval_one_model(model_path, cones, max_steps, progress=False):
     return {"path": model_path, "embedding_size": a["embedding_size"],
             "layer_type": a.get("layer_type", "GAT"),
             "seed": a.get("seed", -1), "args": dict(a), "records": recs}
+
+
+def shard_cones(cones, n_shards):
+    """Split the depot into n_shards lists of cone INDICES, balanced by
+    difficulty: cones are dealt round-robin in descending min_sum_steps order,
+    so every shard gets an equal cut of the hard and the easy cones and no
+    single shard becomes the straggler that bounds wall time."""
+    order = sorted(range(len(cones)),
+                   key=lambda i: -(cones[i].get("min_sum_steps") or 0))
+    return [order[k::n_shards] for k in range(n_shards)]
+
+
+def n_shards_for(n_cones, workers, n_models=1):
+    """Shards per model: ~4 tasks per worker over the whole job, so slow shards
+    load-balance.  Per-task overhead (one checkpoint load) is bounded at ~4
+    loads per worker regardless of depot size, so shards may be tiny."""
+    return max(1, min(-(-4 * workers // max(1, n_models)), n_cones))
+
+
+def merge_shard_results(shard_results, shards, cones):
+    """Reassemble one model's per-shard eval results into a single result blob
+    with records back in depot order.  shard_results holds (shard_idx, result)
+    for ALL of the model's shards; shards holds each shard's depot indices.
+    Cones a shard skipped (n > the model's feature width -- mirroring
+    eval_one_model's filter) are dropped, exactly as a serial rollout would."""
+    ok = [(k, r) for k, r in shard_results if "error" not in r]
+    if not ok:
+        # every shard failed alike (they all load the same checkpoint)
+        return shard_results[0][1]
+    merged = [None] * len(cones)
+    for k, r in ok:
+        a = r["args"]
+        dim = a.get("padding") or a["max_dimension"]
+        kept = [i for i in shards[k] if cones[i]["n"] <= dim]
+        for i, rec in zip(kept, r["records"]):
+            merged[i] = rec
+    return {**ok[0][1], "records": [rec for rec in merged if rec is not None]}
 
 
 def summarize(res):
@@ -652,7 +705,15 @@ def make_detail_png(model, out_png, meta):
     win = sum(g < 0 for g in gaps); tie = sum(g == 0 for g in gaps); loss = sum(g > 0 for g in gaps)
     mean_gap = statistics.mean(gaps) if gaps else float("nan")
 
-    fig, ax = plt.subplots(2, 3, figsize=(19, 11))
+    # dynamic grid: 12 fixed panels + one gap-histogram panel per dimension (8a, 8b, ...),
+    # dealt row-major into however many rows of 3 that needs; leftover slots are blanked
+    dim_list = sorted({nn for (nn, _, _, _, _) in recs})
+    n_panels = 12 + len(dim_list)
+    n_rows = -(-n_panels // 3)
+    fig, ax = plt.subplots(n_rows, 3, figsize=(19, 5.4 * n_rows))
+    panels = iter(ax.ravel())
+    for spare in ax.ravel()[n_panels:]:
+        spare.axis("off")
     name = os.path.basename(os.path.dirname(model["path"]))
     beat_str = f"{win}/{n_res} ({win / n_res:.0%})" if n_res else "n/a"
     tie_str = f"{tie}/{n_res} ({tie / n_res:.0%})" if n_res else "n/a"
@@ -671,46 +732,42 @@ def make_detail_png(model, out_png, meta):
                    ha="center", va="bottom", fontsize=7)
 
     # 1. resolution rate vs dimension n
-    a = ax[0, 0]
+    a = next(panels)
     by_dim = defaultdict(list)
     for (nn, _, _, _, r) in recs:
         by_dim[nn].append(r)
     dims = sorted(by_dim)
     rates = [statistics.mean(by_dim[k]) for k in dims]
-    bars = a.bar(dims, rates, width=0.7, color="C2", alpha=0.85)
+    stds = [statistics.pstdev(by_dim[k]) for k in dims]
+    bars = a.bar(dims, rates, width=0.7, color="C2", alpha=0.85,
+                 yerr=stds, capsize=4, ecolor="k")
     annotate_counts(a, bars, [len(by_dim[k]) for k in dims])
-    if recs:
-        a.scatter(jit([nn for (nn, _, _, _, _) in recs]),
-                  jit([r for (_, _, _, _, r) in recs], scale=0.02),
-                  s=8, alpha=0.25, color="k", zorder=3)
     a.set_xticks(dims); a.set_ylim(-0.06, 1.08)
     a.set_xlabel("dimension n"); a.set_ylabel("fraction resolved")
     a.set_title("1. Resolution rate vs dimension")
 
     # 2. resolution rate vs determinant d (integer-width buckets sized to the observed d range)
-    a = ax[0, 1]
+    a = next(panels)
     dvals = [dd for (_, dd, _, _, _) in recs]
     d_lo, d_hi = (min(dvals), max(dvals)) if dvals else (meta["det_min"], meta["det_max"])
     bucket = max(1, -(-(d_hi - d_lo + 1) // 7))
     edges = np.arange(d_lo, d_hi + bucket + 1, bucket)
-    centers, rrates, rcounts = [], [], []
+    centers, rrates, rstds, rcounts = [], [], [], []
     for i in range(len(edges) - 1):
         sel = [r for (_, dd, _, _, r) in recs if edges[i] <= dd < edges[i + 1]]
         if sel:
             centers.append((edges[i] + edges[i + 1] - 1) / 2)
-            rrates.append(statistics.mean(sel)); rcounts.append(len(sel))
-    bars = a.bar(centers, rrates, width=bucket * 0.85, color="C0", alpha=0.85)
+            rrates.append(statistics.mean(sel)); rstds.append(statistics.pstdev(sel))
+            rcounts.append(len(sel))
+    bars = a.bar(centers, rrates, width=bucket * 0.85, color="C0", alpha=0.85,
+                 yerr=rstds, capsize=4, ecolor="k")
     annotate_counts(a, bars, rcounts)
-    if dvals:
-        a.scatter(jit(dvals, scale=min(0.3, bucket * 0.2)),
-                  jit([r for (_, _, _, _, r) in recs], scale=0.02),
-                  s=8, alpha=0.25, color="k", zorder=3)
     a.set_ylim(-0.06, 1.08)
     a.set_xlabel("determinant d"); a.set_ylabel("fraction resolved")
     a.set_title("2. Resolution rate vs determinant")
 
     # 3. gap distribution (resolved only)
-    a = ax[0, 2]
+    a = next(panels)
     if gaps:
         lo, hi = min(gaps), max(gaps)
         a.hist(gaps, bins=range(lo, hi + 2), align="left", rwidth=0.85, color="C4")
@@ -726,7 +783,7 @@ def make_detail_png(model, out_png, meta):
     a.set_xlabel("gap (agent − min_sum)"); a.set_ylabel("cones")
 
     # 4. parity: min_sum steps vs agent steps (resolved only)
-    a = ax[1, 0]
+    a = next(panels)
     b = [ms for (_, _, ms, _) in resolved]; ag = [ss for (_, _, _, ss) in resolved]
     if b:
         lo, hi = min(min(b), min(ag)), max(max(b), max(ag))
@@ -739,7 +796,7 @@ def make_detail_png(model, out_png, meta):
     a.set_title("4. Agent vs min_sum (parity)\n(below line = agent used fewer)")
 
     # 5. gap vs determinant (resolved only)
-    a = ax[1, 1]
+    a = next(panels)
     a.axhline(0.0, color="gray", lw=1, ls="--")
     dd = [d for (_, d, _, _) in resolved]
     if dd:
@@ -755,7 +812,7 @@ def make_detail_png(model, out_png, meta):
     a.set_title("5. Gap vs determinant")
 
     # 6. win / tie / loss vs min_sum (resolved only)
-    a = ax[1, 2]
+    a = next(panels)
     if gaps:
         fr = [win / len(gaps), tie / len(gaps), loss / len(gaps)]
         bars = a.bar(["beats", "ties", "worse"], fr, color=["C2", "C7", "C3"], alpha=0.85)
@@ -766,6 +823,139 @@ def make_detail_png(model, out_png, meta):
     else:
         a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
     a.set_ylabel("fraction of resolved"); a.set_title("6. Win / tie / loss vs min_sum")
+
+    # ---- per-dimension breakdowns (7-12): same metrics, split by n to compare across dimension ----
+    # fixed color per dimension (n=2 -> slot 0, n=3 -> slot 1, ...) so colors are stable across reports
+    dcolor = {k: CATEGORICAL[(k - 2) % len(CATEGORICAL)] for k in dim_list}
+    res_by_n = {k: [(d2, ms, ss) for (nn, d2, ms, ss, r) in recs if r and nn == k] for k in dim_list}
+    gaps_by_n = {k: [ss - ms for (_, ms, ss) in res_by_n[k]] for k in dim_list}
+
+    # 7. resolution rate vs determinant, one line per dimension (same d buckets as panel 2)
+    a = next(panels)
+    for k in dim_list:
+        cs, rs = [], []
+        for i in range(len(edges) - 1):
+            sel = [r for (nn, d2, _, _, r) in recs if nn == k and edges[i] <= d2 < edges[i + 1]]
+            if sel:
+                cs.append((edges[i] + edges[i + 1] - 1) / 2)
+                rs.append(statistics.mean(sel))
+        a.plot(cs, rs, color=dcolor[k], lw=2, marker="o", ms=4, label=f"n={k}")
+    a.set_ylim(-0.06, 1.08)
+    a.legend(fontsize=8)
+    a.set_xlabel("determinant d"); a.set_ylabel("fraction resolved")
+    a.set_title("7. Resolution rate vs determinant, by dimension")
+
+    # 8a-8x. gap distribution, one panel per dimension (fraction of that dim's
+    # resolved cones; bins shared across the panels so the x-axes compare directly)
+    all_g = [g for k in dim_list for g in gaps_by_n[k]]
+    bins = range(min(all_g), max(all_g) + 2) if all_g else None
+    for j, k in enumerate(dim_list):
+        a = next(panels)
+        g = gaps_by_n[k]
+        if g:
+            w = np.full(len(g), 1.0 / len(g))
+            a.hist(g, bins=bins, align="left", rwidth=0.85, weights=w, color=dcolor[k])
+            a.axvline(0.0, color="gray", lw=1, ls="--")
+        else:
+            a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
+        a.set_xlabel("gap (agent − min_sum)"); a.set_ylabel("fraction of dim's resolved")
+        a.set_title(f"8{chr(ord('a') + j)}. Gap distribution, n={k}  ({len(g)} resolved)")
+
+    # 9. parity by dimension (resolved only)
+    a = next(panels)
+    if resolved:
+        allb = [ms for (_, _, ms, _) in resolved] + [ss for (_, _, _, ss) in resolved]
+        lo, hi = min(allb), max(allb)
+        a.plot([lo, hi], [lo, hi], color="gray", ls="--", lw=1, label="y = x (tie)")
+        for k in dim_list:
+            if res_by_n[k]:
+                a.scatter(jit([ms for (_, ms, _) in res_by_n[k]]),
+                          jit([ss for (_, _, ss) in res_by_n[k]]),
+                          s=12, alpha=0.35, color=dcolor[k], label=f"n={k}")
+        a.legend(fontsize=8)
+    else:
+        a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
+    a.set_xlabel("min_sum steps"); a.set_ylabel("agent steps")
+    a.set_title("9. Agent vs min_sum parity, by dimension\n(below line = agent used fewer)")
+
+    # 10. mean gap vs determinant, one line per dimension (same d buckets; resolved only)
+    a = next(panels)
+    a.axhline(0.0, color="gray", lw=1, ls="--")
+    for k in dim_list:
+        cs, mg = [], []
+        for i in range(len(edges) - 1):
+            sel = [ss - ms for (d2, ms, ss) in res_by_n[k] if edges[i] <= d2 < edges[i + 1]]
+            if sel:
+                cs.append((edges[i] + edges[i + 1] - 1) / 2)
+                mg.append(statistics.mean(sel))
+        a.plot(cs, mg, color=dcolor[k], lw=2, marker="o", ms=4, label=f"n={k}")
+    a.legend(fontsize=8)
+    a.set_xlabel("determinant d"); a.set_ylabel("mean gap (resolved only)")
+    a.set_title("10. Gap vs determinant, by dimension")
+
+    # 11. win / tie / loss vs min_sum, grouped by dimension (fractions of each dim's resolved)
+    a = next(panels)
+    cats = ["beats", "ties", "worse"]
+    xs0 = np.arange(len(cats))
+    bw = 0.8 / max(len(dim_list), 1)
+    for j, k in enumerate(dim_list):
+        g = gaps_by_n[k]
+        if not g:
+            continue
+        fr = [sum(x < 0 for x in g) / len(g), sum(x == 0 for x in g) / len(g),
+              sum(x > 0 for x in g) / len(g)]
+        bars = a.bar(xs0 + j * bw, fr, width=bw * 0.9, color=dcolor[k], label=f"n={k}")
+        annotate_counts(a, bars, [sum(x < 0 for x in g), sum(x == 0 for x in g), sum(x > 0 for x in g)])
+    a.set_xticks(xs0 + bw * (len(dim_list) - 1) / 2)
+    a.set_xticklabels(cats)
+    a.set_ylim(0, 1.14)
+    a.legend(fontsize=8)
+    a.set_ylabel("fraction of dim's resolved")
+    a.set_title("11. Win / tie / loss vs min_sum, by dimension")
+
+    # 12. per-dimension summary table
+    a = next(panels)
+    a.axis("off")
+    if dim_list:
+        cols = ["cones", "resolved", "mean gap", "tie", "beat"]
+        cell = []
+        for k in dim_list:
+            rows_k = [t for t in recs if t[0] == k]
+            g = gaps_by_n[k]
+            nres = len(res_by_n[k])
+            cell.append([f"{len(rows_k)}",
+                         f"{nres / len(rows_k):.1%}" if rows_k else "n/a",
+                         f"{statistics.mean(g):.2f}" if g else "n/a",
+                         f"{sum(x == 0 for x in g) / len(g):.1%}" if g else "n/a",
+                         f"{sum(x < 0 for x in g) / len(g):.1%}" if g else "n/a"])
+        tbl = a.table(cellText=cell, rowLabels=[f"n={k}" for k in dim_list],
+                      colLabels=cols, loc="center", cellLoc="center")
+        tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.6)
+        for j, k in enumerate(dim_list):
+            tbl[j + 1, -1].set_facecolor(dcolor[k]); tbl[j + 1, -1].set_alpha(0.25)
+    a.set_title("12. Summary by dimension")
+
+    # 13. cumulative resolution vs step budget: fraction of cones resolved in <= k steps
+    a = next(panels)
+    max_s = int(meta.get("max_steps") or max((ss for (_, _, _, ss, _) in recs), default=1))
+    ks = np.arange(1, max_s + 1)
+    if recs:
+        agg = np.sort([ss for (_, _, _, ss, r) in recs if r])
+        a.plot(ks, np.searchsorted(agg, ks, side="right") / len(recs),
+               color="0.15", lw=2.5, label="all")
+        for k in dim_list:
+            rows_k = [t for t in recs if t[0] == k]
+            st = np.sort([ss for (_, _, _, ss, r) in rows_k if r])
+            a.plot(ks, np.searchsorted(st, ks, side="right") / len(rows_k),
+                   color=dcolor[k], lw=1.8, label=f"n={k}")
+        a.legend(fontsize=8)
+    else:
+        a.text(0.5, 0.5, "no records", ha="center", va="center")
+    a.set_xticks(np.arange(0, max_s + 1, max(1, max_s // 10)))
+    a.grid(axis="x", alpha=0.3)
+    a.set_ylim(0, 1.05)
+    a.set_xlabel("step budget k"); a.set_ylabel("fraction resolved in ≤ k steps")
+    a.set_title("13. Cumulative resolution vs step budget")
 
     # footer: this model's full hyperparameters
     a = model.get("args", {})
@@ -858,7 +1048,8 @@ def main():
                          "c_puct, layer_type (default: auto-detect the sweep's varied axis "
                          "from sweep_meta.json, else the arg that varies across the models)")
     ap.add_argument("--workers", type=int, default=1,
-                    help="parallel model-evaluation processes")
+                    help="parallel evaluation processes for sweep mode; single-model "
+                         "mode (--model) always rolls out serially on one thread")
     ap.add_argument("--out", default=None,
                     help="output PNG path (default: <sweep-dir>/validation_eval.png)")
     ap.add_argument("--replot", action="store_true",
@@ -897,17 +1088,29 @@ def main():
         print(f"no {args.dataset} cones match {args.min_dimension}<=n<={args.max_dimension}, "
               f"{args.det_min}<=d<={args.det_max}; widen the filter."); return
     model_paths = sorted(glob.glob(os.path.join(args.sweep_dir, "t*", "model.pt")))
+    n_shards = n_shards_for(len(cones), args.workers, len(model_paths))
+    shards = shard_cones(cones, n_shards)
     print(f"{len(model_paths)} models  x  {len(cones)} {args.dataset} cones  "
           f"({args.min_dimension}<=n<={args.max_dimension}, {args.det_min}<=d<={args.det_max})  "
-          f"max_steps={args.max_steps}  workers={args.workers}")
+          f"max_steps={args.max_steps}  workers={args.workers}  shards/model={n_shards}")
 
+    # each model's depot is split into n_shards cone shards and every
+    # (model, shard) pair is its own pool task, so one slow model -- or a sweep
+    # of a single model -- still spreads across all workers
     models, errors = [], []
+    done_shards = defaultdict(list)
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(eval_one_model, p, cones, args.max_steps): p for p in model_paths}
-        bar = tqdm(as_completed(futs), total=len(futs), desc="eval", unit="model")
+        futs = {ex.submit(eval_one_model, p,
+                          [cones[i] for i in sh], args.max_steps): (p, k)
+                for p in model_paths for k, sh in enumerate(shards)}
+        bar = tqdm(as_completed(futs), total=len(futs), desc="eval", unit="shard")
         for fut in bar:
-            r = fut.result()
-            name = os.path.basename(os.path.dirname(r["path"]))
+            p, k = futs[fut]
+            done_shards[p].append((k, fut.result()))
+            if len(done_shards[p]) < n_shards:
+                continue
+            r = merge_shard_results(done_shards.pop(p), shards, cones)
+            name = os.path.basename(os.path.dirname(p))
             if "error" in r:
                 errors.append(r); bar.write(f"  SKIP {name}: {r['error']}")
             else:

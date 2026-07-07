@@ -83,6 +83,9 @@ class CGLGraph(HeteroData):
 
     def computeConeFeature(self, cone: Cone) -> torch.Tensor:
         n    = len(cone.rays[0])
+        if n > self._dimension:
+            raise ValueError(f"cone dimension n={n} exceeds graph feature width "
+                             f"(padding) {self._dimension}")
         mult = float(cone.multiplicity)
         feat = []
         for _ in range(n):
@@ -92,6 +95,9 @@ class CGLGraph(HeteroData):
         return torch.tensor(feat, dtype=torch.float)
 
     def computeVectorFeature(self, coord: tuple) -> torch.Tensor:
+        if len(coord) > self._dimension:
+            raise ValueError(f"vector length {len(coord)} exceeds graph feature width "
+                             f"(padding) {self._dimension}")
         feat = []
         for x in coord:
             feat.append(float(x))
