@@ -12,6 +12,10 @@ gnn_pyg_files/sweep.out
 gnn_pyg_files/eval_validation.py
 gnn_pyg_files/eval_validation.out
 gnn_pyg_files/hyp_grid.py
+gnn_pyg_files/CGLGraph2.py
+gnn_pyg_files/evaluate_checkpoints.py
+gnn_pyg_files/train_ameen.py
+gnn_pyg_files/mcts_ameen.py
 gnn_experimental
 .DS_Store
 gnn_pyg_files/.DS_Store

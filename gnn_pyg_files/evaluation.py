@@ -705,10 +705,11 @@ def make_detail_png(model, out_png, meta):
     win = sum(g < 0 for g in gaps); tie = sum(g == 0 for g in gaps); loss = sum(g > 0 for g in gaps)
     mean_gap = statistics.mean(gaps) if gaps else float("nan")
 
-    # dynamic grid: 12 fixed panels + one gap-histogram panel per dimension (8a, 8b, ...),
-    # dealt row-major into however many rows of 3 that needs; leftover slots are blanked
+    # dynamic grid: 11 fixed panels + one gap-histogram panel per dimension (8a, 8b, ...)
+    # + one parity panel per dimension (9a, 9b, ...), dealt row-major into however many
+    # rows of 3 that needs; leftover slots are blanked
     dim_list = sorted({nn for (nn, _, _, _, _) in recs})
-    n_panels = 12 + len(dim_list)
+    n_panels = 11 + 2 * len(dim_list)
     n_rows = -(-n_panels // 3)
     fig, ax = plt.subplots(n_rows, 3, figsize=(19, 5.4 * n_rows))
     panels = iter(ax.ravel())
@@ -766,21 +767,20 @@ def make_detail_png(model, out_png, meta):
     a.set_xlabel("determinant d"); a.set_ylabel("fraction resolved")
     a.set_title("2. Resolution rate vs determinant")
 
-    # 3. gap distribution (resolved only)
+    # 3. gap distribution (resolved only): one purple dot per cone; the vertical
+    # spread is random jitter purely so overlapping dots stay visible
     a = next(panels)
     if gaps:
-        lo, hi = min(gaps), max(gaps)
-        a.hist(gaps, bins=range(lo, hi + 2), align="left", rwidth=0.85, color="C4")
+        a.scatter(jit(gaps), np.random.uniform(0, 1, len(gaps)),
+                  s=14, alpha=0.35, color="purple", zorder=3)
         a.axvline(0.0, color="gray", lw=1, ls="--")
-        ## rug strip of the individual gaps along the bottom
-        a.scatter(jit(gaps), np.random.uniform(0.015, 0.06, len(gaps)) * a.get_ylim()[1],
-                  s=8, alpha=0.25, color="k", zorder=3)
+        a.set_ylim(-0.08, 1.08); a.set_yticks([])
         n_opt = sum(1 for g in gaps if g <= 0)
         a.set_title(f"3. Gap distribution  (≤min_sum: {n_opt}/{len(gaps)})")
     else:
         a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
         a.set_title("3. Gap distribution")
-    a.set_xlabel("gap (agent − min_sum)"); a.set_ylabel("cones")
+    a.set_xlabel("gap (agent − min_sum)"); a.set_ylabel("one dot per resolved cone")
 
     # 4. parity: min_sum steps vs agent steps (resolved only)
     a = next(panels)
@@ -861,22 +861,25 @@ def make_detail_png(model, out_png, meta):
         a.set_xlabel("gap (agent − min_sum)"); a.set_ylabel("fraction of dim's resolved")
         a.set_title(f"8{chr(ord('a') + j)}. Gap distribution, n={k}  ({len(g)} resolved)")
 
-    # 9. parity by dimension (resolved only)
-    a = next(panels)
+    # 9a-9x. parity, one panel per dimension (resolved only; shared axis range so
+    # the panels compare directly)
     if resolved:
         allb = [ms for (_, _, ms, _) in resolved] + [ss for (_, _, _, ss) in resolved]
-        lo, hi = min(allb), max(allb)
-        a.plot([lo, hi], [lo, hi], color="gray", ls="--", lw=1, label="y = x (tie)")
-        for k in dim_list:
-            if res_by_n[k]:
-                a.scatter(jit([ms for (_, ms, _) in res_by_n[k]]),
-                          jit([ss for (_, _, ss) in res_by_n[k]]),
-                          s=12, alpha=0.35, color=dcolor[k], label=f"n={k}")
-        a.legend(fontsize=8)
-    else:
-        a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
-    a.set_xlabel("min_sum steps"); a.set_ylabel("agent steps")
-    a.set_title("9. Agent vs min_sum parity, by dimension\n(below line = agent used fewer)")
+        plo, phi = min(allb), max(allb)
+    for j, k in enumerate(dim_list):
+        a = next(panels)
+        if res_by_n[k]:
+            a.plot([plo, phi], [plo, phi], color="gray", ls="--", lw=1, label="y = x (tie)")
+            a.scatter(jit([ms for (_, ms, _) in res_by_n[k]]),
+                      jit([ss for (_, _, ss) in res_by_n[k]]),
+                      s=14, alpha=0.4, color=dcolor[k])
+            a.legend(fontsize=8)
+            a.set_xlim(plo - 1, phi + 1); a.set_ylim(plo - 1, phi + 1)
+        else:
+            a.text(0.5, 0.5, "no resolved cones", ha="center", va="center")
+        a.set_xlabel("min_sum steps"); a.set_ylabel("agent steps")
+        a.set_title(f"9{chr(ord('a') + j)}. Agent vs min_sum parity, n={k}  "
+                    f"({len(res_by_n[k])} resolved)\n(below line = agent used fewer)")
 
     # 10. mean gap vs determinant, one line per dimension (same d buckets; resolved only)
     a = next(panels)
@@ -928,11 +931,19 @@ def make_detail_png(model, out_png, meta):
                          f"{statistics.mean(g):.2f}" if g else "n/a",
                          f"{sum(x == 0 for x in g) / len(g):.1%}" if g else "n/a",
                          f"{sum(x < 0 for x in g) / len(g):.1%}" if g else "n/a"])
-        tbl = a.table(cellText=cell, rowLabels=[f"n={k}" for k in dim_list],
+        # aggregate row over every dimension (same overall stats as the suptitle)
+        cell.append([f"{n}",
+                     f"{n_res / n:.1%}" if n else "n/a",
+                     f"{mean_gap:.2f}" if gaps else "n/a",
+                     f"{tie / n_res:.1%}" if n_res else "n/a",
+                     f"{win / n_res:.1%}" if n_res else "n/a"])
+        tbl = a.table(cellText=cell, rowLabels=[f"n={k}" for k in dim_list] + ["all"],
                       colLabels=cols, loc="center", cellLoc="center")
         tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1, 1.6)
         for j, k in enumerate(dim_list):
             tbl[j + 1, -1].set_facecolor(dcolor[k]); tbl[j + 1, -1].set_alpha(0.25)
+        for c in range(-1, len(cols)):
+            tbl[len(dim_list) + 1, c].set_facecolor("0.9")
     a.set_title("12. Summary by dimension")
 
     # 13. cumulative resolution vs step budget: fraction of cones resolved in <= k steps

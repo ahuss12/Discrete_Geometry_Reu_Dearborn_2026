@@ -31,8 +31,10 @@
 #    --timeout-penalty       penalty added to reward when an episode times out
 #    --timeout-multiplier    timeout threshold as a multiple of the baseline step count
 #    --early-termination     stop an episode once it exceeds timeout-multiplier * baseline
-#    --resolved-reward-type  index (0-5) selecting the reward variant for resolved episodes
-#    --timeout-reward-type   index (0-3) selecting the reward variant for timed-out episodes
+#    --reward-type           index (0-7) selecting the reward variant (see reward_function)
+#    --step-cost             per-step cost for the potential-based rewards (types 6 and 7)
+#    --mcts-potential-shaping   toggle: determinant-potential edge rewards in MCTS backup
+#                               (default off = original search; sweepable true/false)
 #    --resume PATH           continue training from an existing checkpoint
 #    --save PATH             where to write the final / periodic checkpoint
 #    --diag-dir DIR          parent dir for per-run diagnostics (a timestamped subdir is made)
@@ -137,6 +139,10 @@ def min_sum(graph: CGLGraph) -> tuple[int, list["Cone"], list[tuple[int]]]:
         actions.append(subdivision_point)
     return step_count, cones, actions
 
+## potential of a fan: sum over cones of max(det - 1, 0). Zero exactly when the fan is resolved.
+def fan_potential(graph: CGLGraph) -> int:
+    return sum(max(cone.multiplicity - 1, 0) for cone in graph._cone_objects.values())
+
 def random_baseline(graph: CGLGraph, rng: random.Random, max_steps: int = 200) -> tuple[int, bool]:
     cones = list(graph._cone_objects.values())
     step_count = 0
@@ -193,8 +199,14 @@ def reward_function(
     max_steps: int,
     root_mult: int,
     baseline_left: int,
-    baseline_to_go: Optional[list[int,...]] = None, 
+    baseline_to_go: Optional[list[int,...]] = None,
+    potential: Optional[int] = None,        ## phi(s_t) for the state being labeled (types 6, 7)
+    final_potential: Optional[int] = None,  ## phi of the terminal/truncated fan (types 6, 7)
+    max_potential: Optional[int] = None,    ## max phi along the trajectory, for normalization (type 7)
+    step_cost: float = 0.5,                 ## per-step cost added to the potential rewards (types 6, 7)
     ) -> float:
+    ## types 6/7 are the value target implied by the per-step reward r_k = phi(s_k) - phi(s_{k+1}) - step_cost,
+    ## i.e. the return-to-go, which telescopes to phi(s_t) - phi(s_final) - step_cost * (steps remaining).
     if resolved:
         variants = [
             lambda: float(baseline_steps_taken - agent_steps_taken), #0 standard
@@ -203,9 +215,12 @@ def reward_function(
             lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult, #3 alperen's suggestion
             lambda: float(root_mult - agent_steps_taken)/root_mult, #4 dummy reward
             lambda: max(-1.0, min(1.0, 1.0 - (agent_steps_taken - t) / max(baseline_steps_taken, 1))), #5 claude suggestion - shape along the path
+            lambda: float(potential - final_potential) - step_cost * (agent_steps_taken - t), #6 potential difference + step cost (raw det units)
+            lambda: float(potential - final_potential) / max(max_potential, 1)
+                    - step_cost * (agent_steps_taken - t) / max(baseline_steps_taken, 1), #7 potential difference + step cost (normalized)
         ]
         reward = variants[reward_type]()
-            
+
     else:
         variants = [
             lambda: -timeout_penalty, #0 standard
@@ -213,7 +228,10 @@ def reward_function(
             lambda: -timeout_penalty,#2 all negative
             lambda: float(baseline_steps_taken - agent_steps_taken)/root_mult - timeout_penalty, #3 alperen's suggestion
             lambda: float(root_mult - agent_steps_taken)/root_mult - timeout_penalty, #4 dummy reward
-            lambda: max(-1.0, min(1.0, 1.0 - ((agent_steps_taken - t) + baseline_left) / max(baseline_steps_taken, 1))) #5 claude suggestion - shape along the path
+            lambda: max(-1.0, min(1.0, 1.0 - ((agent_steps_taken - t) + baseline_left) / max(baseline_steps_taken, 1))), #5 claude suggestion - shape along the path
+            lambda: float(potential - final_potential) - step_cost * (agent_steps_taken - t) - timeout_penalty, #6 potential difference + step cost (raw det units)
+            lambda: float(potential - final_potential) / max(max_potential, 1)
+                    - step_cost * (agent_steps_taken - t) / max(baseline_steps_taken, 1) - timeout_penalty, #7 potential difference + step cost (normalized)
         ]
         reward = variants[reward_type]()
     return reward
@@ -245,7 +263,11 @@ def self_play_episode(
     episode_idx: int = -1, # for logging
     timeout_multiplier: float = 2.0,
     early_termination: bool = False,
-    reward_type: int
+    reward_type: int,
+    step_cost: float = 0.5,
+    mcts_potential_shaping: bool = False,
+    mcts_potential_weight: float = 1.0,
+    mcts_step_penalty: float = 1.0
     ) -> List[CGLGraph]:
     states = []
     policies = []
@@ -270,7 +292,10 @@ def self_play_episode(
             c_puct = c_puct,
             dirichlet_alpha = dirichlet_alpha,
             dirichlet_eps = dirichlet_eps,
-            device = device)
+            device = device,
+            reward_mode = "det_potential" if mcts_potential_shaping else "none",
+            potential_weight = mcts_potential_weight,
+            step_penalty = mcts_step_penalty)
     reuse_node = None
 
     ## run full MCTS from initial state to decomposition. 
@@ -320,7 +345,12 @@ def self_play_episode(
 
     ## capture the terminal fan now
     final_fan = [c.rays for c in state._cone_objects.values()]
-    
+
+    ## potentials for reward types 6/7, taken from the stored copies (initial_state is mutated in place)
+    final_potential = fan_potential(state)
+    potentials = [fan_potential(s) for s in states]
+    max_potential = max(potentials + [final_potential], default=0)
+
     examples: List[HeteroData] = []
     agent_steps_taken = len(states) 
     rewards: List[float] = [] ## info for logging
@@ -337,7 +367,11 @@ def self_play_episode(
         timeout_penalty, 
         max_steps, 
         root_mult=root_mult,
-        baseline_left=baseline_left)
+        baseline_left=baseline_left,
+        potential=potentials[t],
+        final_potential=final_potential,
+        max_potential=max_potential,
+        step_cost=step_cost)
         rewards.append(reward)
 
         attach_targets(state, 
@@ -463,8 +497,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--diag-dir", type=str, default="results")
     parser.add_argument("--early-termination", action="store_true")
     parser.add_argument("--reward-type", type=int,default=1)
+    parser.add_argument("--step-cost", type=float, default=0.5,
+                        help="Per-step cost for the potential-based rewards (types 6 and 7). "
+                             "Type 6 charges it raw per step; type 7 divides it by the baseline step count.")
+    parser.add_argument("--mcts-potential-shaping", action="store_true",
+                        help="Toggle (default off = original search): back up determinant-potential "
+                             "transition rewards inside MCTS, r = w*(Phi(s)-Phi(s')) - penalty, "
+                             "normalized by Phi(search root). Ported from mcts_ameen/train_ameen.")
+    parser.add_argument("--mcts-potential-weight", type=float, default=1.0,
+                        help="w in the MCTS transition reward (only used with --mcts-potential-shaping).")
+    parser.add_argument("--mcts-step-penalty", type=float, default=1.0,
+                        help="Per-edge action cost in the MCTS transition reward (only used with --mcts-potential-shaping).")
     parser.add_argument("--layer-type", choices=["GAT", "GraphConv"], default="GraphConv")
-    parser.add_argument("--save-every", type=int, default=0,
+    parser.add_argument("--save-every", type=int, default=100,
                         help="Save a separate checkpoint copy (<run_dir>/checkpoints/model_ep<N>.pt) "
                              "every N episodes. 0 (default) saves only the final model.")
 
@@ -576,7 +621,11 @@ def main() -> None:
             episode_idx=ep,
             timeout_multiplier = args.timeout_multiplier,
             early_termination=args.early_termination,
-            reward_type = args.reward_type
+            reward_type = args.reward_type,
+            step_cost = args.step_cost,
+            mcts_potential_shaping = args.mcts_potential_shaping,
+            mcts_potential_weight = args.mcts_potential_weight,
+            mcts_step_penalty = args.mcts_step_penalty
         )
 
         replay.extend(examples)

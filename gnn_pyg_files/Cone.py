@@ -2,7 +2,7 @@ import math
 from dataclasses import dataclass
 from functools import cached_property
 from fractions import Fraction
-from utils import primitive, intDet, canonicalForm, linsolve
+from utils import primitive, intDet, canonicalForm, linsolve, adjugate
 
 Vector = tuple[int, ...]
 
@@ -51,53 +51,105 @@ class Cone:
 
     @cached_property
     def multiplicity(self) -> int:
+        adj = self.__dict__.get("_adjugate") ## adjugate computation also stores determinant for convenience
+        if adj is not None:
+            return abs(adj[1])
+        
         M = [list(ray) for ray in self.rays]
         return abs(intDet(M))
+    
+    @cached_property
+    ## adj(A) and det(A) for A = matrix whose columns are the rays. adj(A) @ A = det(A) * I_n
+    ## A @ x = p  =>  x = adj(A) @ p / det(A). Computed once, reused per query.
+    def _adjugate(self) -> tuple[list[list[int]], int]:
+        A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]
+        return adjugate(A)
 
     def barycentricCoords(self, p: Vector) -> tuple[Fraction, ...]:
-        A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]
-        b = [x for x in p]
-        coords = linsolve(A,b)
-        if any(x < 0 for x in coords):
+        adj, det = self._adjugate 
+        n = len(self.rays)
+        barys = [sum(adj[i][j] * p[j] for j in range(n)) for i in range(n)]
+        if any ((bary < 0) != (det < 0) and bary != 0 for bary in barys):
             raise ValueError("point p must be in the cone")
-        return coords
+        return tuple(Fraction(bary, det) for bary in barys)
 
     def contains(self, p: Vector) -> bool:
-        A = [[gen[i] for gen in self.rays] for i in range(len(self.rays))]
-        b = [x for x in p]
-        coords = linsolve(A,b)
-        if any(x < 0 for x in coords):
+        adj, det = self._adjugate
+        n = len(self.rays)
+        if any ((bary < 0) != (det < 0) and bary != 0 for bary in 
+        [sum(adj[i][j] * p[j] for j in range(n)) for i in range(n)]):
             return False
-
         return True
 
     @cached_property
     ## returns a tuple, first is a list of extraneous set points, and second is the barycentric coordinates of those points. 
     def extraneousSet(self) -> tuple[list[Vector], list[Vector]]:
+
         n = len(self.rays)
         A = [[r[j] for r in self.rays] for j in range(n)]
         H = canonicalForm([row[:] for row in A])
 
-        lambdas = [[Fraction(i, H[-1][-1])] for i in range(H[-1][-1])]
+        ## D = det = product of positive HNF pivots; every lambda has denom | D,
+        ## so track integer numerators lam*D and divide once at the very end.
+        D = 1
+        for i in range(n):
+            D *= H[i][i]
+
+        last = H[-1][-1]
+        lambdas = [[i * (D // last)] for i in range(last)]
 
         for i in reversed(range(n - 1)):
+            hii = H[i][i]
             newLambdas = []
             for curr in lambdas:
-                s = sum(curr[col - (i + 1)] * H[i][col] for col in range(i + 1, n))
-                for k in range(H[i][i]):
-                    newLambdas.append([Fraction(math.ceil(s) - s + k, H[i][i])] + curr)
+                ## S = s * D, where s = sum_{col>i} lam_col * H[i][col]
+                S = sum(curr[col - (i + 1)] * H[i][col] for col in range(i + 1, n))
+                ceilS = -((-S) // D)            ## ceil(S / D) via integer division
+                base = D * ceilS - S            ## D * (ceil(s) - s), exact integer
+                for k in range(hii):
+                    ## (base + k*D) is divisible by hii since lam_i * D is integral
+                    newLambdas.append([(base + k * D) // hii] + curr)
             lambdas = newLambdas
 
+        ## vec holds lam*D, so A @ vec = D * (A @ lam); divide back to the lattice point
         vectors = [
-            tuple(int(math.sumprod(A[i], vec)) for i in range(n))
+            tuple(math.sumprod(A[i], vec) // D for i in range(n))
             for vec in lambdas
         ]
 
         ## don't return the zero vector
-        z = vectors.index((0,) * n)  
+        z = vectors.index((0,) * n)
         del vectors[z], lambdas[z]
 
+        ## single divide restores exact Fraction barycentric coords for callers
+        lambdas = [tuple(Fraction(x, D) for x in vec) for vec in lambdas]
+
         return vectors, lambdas
+        
+        # n = len(self.rays)
+        # A = [[r[j] for r in self.rays] for j in range(n)]
+        # H = canonicalForm([row[:] for row in A])
+
+        # lambdas = [[Fraction(i, H[-1][-1])] for i in range(H[-1][-1])]
+
+        # for i in reversed(range(n - 1)):
+        #     newLambdas = []
+        #     for curr in lambdas:
+        #         s = sum(curr[col - (i + 1)] * H[i][col] for col in range(i + 1, n))
+        #         for k in range(H[i][i]):
+        #             newLambdas.append([Fraction(math.ceil(s) - s + k, H[i][i])] + curr)
+        #     lambdas = newLambdas
+
+        # vectors = [
+        #     tuple(int(math.sumprod(A[i], vec)) for i in range(n))
+        #     for vec in lambdas
+        # ]
+
+        # ## don't return the zero vector
+        # z = vectors.index((0,) * n)  
+        # del vectors[z], lambdas[z]
+
+        # return vectors, lambdas
 
     def HNF(self) -> "Cone":
         n = len(self.rays)

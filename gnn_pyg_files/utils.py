@@ -132,23 +132,23 @@ def linsolve(A: list[list[int]], b:list[int]) -> tuple[Fraction, ...]:
 
     return tuple(M[i][n] for i in range(n))
 
-## applies cramer's rule to quickly find solution to Ax=b
-def cramer_coords(A: list[list[int]], b: list[int]) -> tuple[Fraction, ...]:
-    D = intDet(A) 
-
-    if D == 0:
-        return ValueError("Matrix A is not invertible")
-
-    n = len(A)
-    coords = []
+## exact integer adjugate (classical adjoint) of a square integer matrix,
+## returned together with det(M). Satisfies adj(M) @ M == det(M) * I over Z,
+## so M^{-1} == adj(M) / det(M) with no fractions until a single final divide.
+def adjugate(M: list[list[int]]) -> tuple[list[list[int]], int]:
+    n = len(M)
+    if n == 1:
+        return [[1]], M[0][0]
+    det = intDet(M)
+    adj = [[0] * n for _ in range(n)]
     for i in range(n):
-        a_i = Fraction(intDet([[A[j][k]] if k != i else b[j] for k in range(n)] for j in range(n)), D)
-        coords.append(a_i)
-    return tuple(coords)
-
-# ## sum of log of determinants of each cone in the fan
-# def log_det_sum(state) -> float:
-#     return sum(math.log2(c.multiplicity) for c in state._cone_objects.values())
+        for j in range(n):
+            ## adj[i][j] = cofactor_{j,i} = (-1)^(i+j) * minor deleting row j, col i
+            minor = [[M[r][c] for c in range(n) if c != i]
+                     for r in range(n) if r != j]
+            cof = intDet(minor)
+            adj[i][j] = cof if (i + j) % 2 == 0 else -cof
+    return adj, det
 
 # ===========================================================================================
 #  GRAPH NEURAL NETWORK HELPER FUNCTIONS

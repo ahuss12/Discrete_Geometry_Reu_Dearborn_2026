@@ -79,13 +79,28 @@ class MCTS:
         c_puct: float = 1.5,
         dirichlet_alpha: Optional[float] = None,
         dirichlet_eps: float = 0.25,
-        device: Optional[torch.device | str] = None
+        device: Optional[torch.device | str] = None,
+        reward_mode: str = "none",
+        potential_weight: float = 1.0,
+        step_penalty: float = 1.0,
+        normalize_reward: bool = True
         ) -> None:
         self.model = model
         self.num_simulations = int(num_simulations)
         self.c_puct = float(c_puct)
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_eps = float(dirichlet_eps)
+
+        ## transition reward used in backup. "none" = original behavior (leaf value only);
+        ## "det_potential" = potential_weight * (Phi(s) - Phi(s')) - step_penalty per edge,
+        ## where Phi = sum over cones of max(mult - 1, 0), normalized by Phi(search root).
+        if reward_mode not in {"none", "det_potential"}:
+            raise ValueError(f"reward_mode must be 'none' or 'det_potential', got {reward_mode!r}")
+        self.reward_mode = reward_mode
+        self.potential_weight = float(potential_weight)
+        self.step_penalty = float(step_penalty)
+        self.normalize_reward = bool(normalize_reward)
+        self._root_norm = 1.0  ## reset per run()
 
         if device is None:
             try:
@@ -104,6 +119,12 @@ class MCTS:
     reuse_node: Optional["MCTSNode"] = None) -> SearchResult:
 
         self.model.eval()
+
+        ## per-root reward scale, so Q stays O(1) regardless of the root determinant
+        if self.reward_mode == "det_potential" and self.normalize_reward:
+            self._root_norm = max(self._potential(root_state), 1.0)
+        else:
+            self._root_norm = 1.0
 
         if reuse_node is not None:
             root = reuse_node
@@ -143,15 +164,35 @@ class MCTS:
                 node = node.children[action_index]
                     
             # Backup
-            for parent, action_index in reversed(path):
-                parent.N[action_index] += 1
-                parent.W[action_index] += leaf_value
-                parent.Q[action_index] = parent.W[action_index] / parent.N[action_index]
+            if self.reward_mode == "none":
+                ## original behavior: every edge on the path receives the leaf value unchanged
+                for parent, action_index in reversed(path):
+                    parent.N[action_index] += 1
+                    parent.W[action_index] += leaf_value
+                    parent.Q[action_index] = parent.W[action_index] / parent.N[action_index]
+            else:
+                ## potential shaping: each edge backs up (edge reward + return below it)
+                ret = float(leaf_value)
+                for parent, action_index in reversed(path):
+                    child = parent.children[action_index]
+                    ret = self._edge_reward(parent.state, child.state) + ret
+                    parent.N[action_index] += 1
+                    parent.W[action_index] += ret
+                    parent.Q[action_index] = parent.W[action_index] / parent.N[action_index]
 
         visit_counts = root.N.copy()
         return SearchResult(root.actions, visit_counts, target_temperature, play_temperature, root)
 
-    ## Expands a leaf node, adding outward edges for all possible subdivision actions. Return estimated value of current state. 
+    ## Phi(s) = sum over cones of max(mult - 1, 0). Zero exactly when the fan is resolved.
+    def _potential(self, state: CGLGraph) -> float:
+        return float(sum(max(cone.multiplicity - 1, 0) for cone in state._cone_objects.values()))
+
+    ## Transition reward for one subdivision edge (only used when reward_mode="det_potential").
+    def _edge_reward(self, parent_state: CGLGraph, child_state: CGLGraph) -> float:
+        raw = self.potential_weight * (self._potential(parent_state) - self._potential(child_state)) - self.step_penalty
+        return raw / self._root_norm
+
+    ## Expands a leaf node, adding outward edges for all possible subdivision actions. Return estimated value of current state.
     def _expand(self, node: MCTSNode) -> float:
         node.expanded = True
         actions, priors, value = self._evaluate_state(node.state)
@@ -318,6 +359,28 @@ def main():
     assert res2.root is reuse, "reuse: root should be the passed-in node"
     assert reuse.N.sum() > 0, "reuse: node should have prior visits"
     print("[10] tree reuse OK")
+
+    # ---- 11. det_potential reward mode -------------------------------------
+    seed()
+    base_res = mcts.run(singular_root(), target_temperature=1.0, play_temperature=1.0, add_root_noise=False)
+    seed()
+    none_res = MCTS(model, num_simulations=400, c_puct=1.5, dirichlet_alpha=0.3,
+                    dirichlet_eps=0.25, reward_mode="none").run(
+                        singular_root(), target_temperature=1.0, play_temperature=1.0, add_root_noise=False)
+    assert np.array_equal(base_res.visit_counts, none_res.visit_counts), "reward_mode='none' changed default search"
+    seed()
+    mcts_pot = MCTS(model, num_simulations=40, c_puct=1.5,
+                    reward_mode="det_potential", potential_weight=1.0, step_penalty=1.0)
+    assert mcts_pot._potential(singular_root()) == 6.0, "Phi(det-7 cone) should be 6"
+    assert mcts_pot._potential(nonsingular_root()) == 0.0, "Phi(smooth cone) should be 0"
+    res_pot = mcts_pot.run(singular_root(), target_temperature=1.0, play_temperature=1.0, add_root_noise=False)
+    assert res_pot.visit_counts.sum() == mcts_pot.num_simulations, "det_potential: visits not conserved"
+    assert np.isfinite(res_pot.root.Q).all(), "det_potential: non-finite Q"
+    try:
+        MCTS(model, reward_mode="bogus"); assert False, "bad reward_mode should raise"
+    except ValueError:
+        pass
+    print("[11] det_potential reward mode OK")
 
     print("ALL TESTS PASSED")
 
